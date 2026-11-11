@@ -10,7 +10,7 @@ Personal dot-file config synced between two laptops (Arch/Omarchy) via this priv
 | `bin/dev-container` | Symlinked to `~/.local/bin/dev-container`; only files listed in the script's `binFiles` array are linked — add a name there to link another bin |
 | `global-bashrc` / `naga-bashrc` | Bash config, sourced from `~/.bashrc` via `DOT_FILES` |
 | `1-create-symlinks.sh` | Creates/refreshes the symlinks (repo files win; existing targets replaced silently) |
-| `2-git-sync.sh` | Pull --rebase, commit everything, push; run manually as `dot-sync` |
+| `2-git-sync.sh` | Commit everything, pull --rebase (aborts on conflict, never pushes a conflicted tree), push; run manually as `dot-sync` |
 
 ## Setup on a new laptop
 
