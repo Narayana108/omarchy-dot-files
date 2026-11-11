@@ -1,0 +1,71 @@
+# -----------------------------------------------------------------------------
+# Naga bashrc
+# Add your own exports, aliases, and functions here.
+# -----------------------------------------------------------------------------
+
+. "$HOME/.local/share/../bin/env"
+
+# -----------------------------------------------------------------------------
+# Path
+# -----------------------------------------------------------------------------
+
+export PATH="/home/rsi/.cache/.bun/bin:$PATH"
+
+export PATH="/home/rsi/.opencode/bin:$PATH"
+
+export PATH="/data/llms/tools_configs/llama.cpp/build/bin:$PATH"
+
+export LLM_HOME="/data/llms"
+
+#export WINEPREFIX="$HOME/Games/battlenet"
+export WINEPREFIX="$HOME/Games/W3Champions"
+
+export VAGRANT_DEFAULT_PROVIDER=libvirt
+
+# -----------------------------------------------------------------------------
+# Aliases
+# -----------------------------------------------------------------------------
+
+alias krita_launch='QT_SCALE_FACTOR=2 krita-5.3.3-x86_64.AppImage'
+
+alias llama-start="$LLM_TOOLS/llama.cpp/build/bin/llama server --models-preset $LLM_TOOLS/model-configs.ini"
+alias llama_q-start="$LLM_TOOLS/llama-cpp-turboquant/build/bin/llama server --models-preset $LLM_TOOLS/qwen-tq-model-configs.ini --host 0.0.0.0 --metrics"
+alias llama_g-start="$LLM_TOOLS/llama-cpp-turboquant/build/bin/llama server --models-preset $LLM_TOOLS/gemma-tq-model-configs.ini --host 0.0.0.0 --metrics"
+
+alias llama_as-tq-q-start='TURBO_AUTO_ASYMMETRIC=0 \
+    $LLM_TOOLS/llama-cpp-turboquant/build/bin/llama server \
+        --models-preset $LLM_TOOLS/qwen-tq-model-configs.ini \
+        --host 0.0.0.0 \
+        --metrics \
+        --api-key "$LLAMA_API_KEY"'
+
+start_strata_iq3() {
+    "$LLM_TOOLS/Strata/run-iq3_s.sh" &
+    strata_pid=$!
+
+    ompweb &
+    ompweb_pid=$!
+
+    trap 'kill "$strata_pid" "$ompweb_pid" 2>/dev/null; wait "$strata_pid" "$ompweb_pid" 2>/dev/null' INT TERM EXIT
+
+    wait "$strata_pid" "$ompweb_pid"
+}
+
+start_strata_coder() {
+    "$LLM_TOOLS/Strata/run-coder-iq1_m.sh" &
+    strata_pid=$!
+
+    ompweb &
+    ompweb_pid=$!
+
+    trap 'kill "$strata_pid" "$ompweb_pid" 2>/dev/null; wait "$strata_pid" "$ompweb_pid" 2>/dev/null' INT TERM EXIT
+
+    wait "$strata_pid" "$ompweb_pid"
+}
+
+# -----------------------------------------------------------------------------
+# Completion
+# -----------------------------------------------------------------------------
+eval "$(_HF_COMPLETE=bash_source hf)"
+# -----------------------------------------------------------------------------
+

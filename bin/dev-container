@@ -1,0 +1,258 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+# ============================================================
+# Configuration
+# ============================================================
+
+IMAGE="localhost/thoth:debian13"
+WORKSPACES_DIR="/data/llms/agent_work_spaces"
+CONTAINER_PREFIX="thoth"
+
+CONTAINER_UID=1000
+CONTAINER_GID=1000
+
+BASE_OMP_PORT=3000
+BASE_VITE_PORT=5173
+BASE_API_PORT=8000
+
+PORT_STEP=1000
+MAX_PORT_OFFSET=57000
+
+fail() {
+    printf 'Error: %s\n' "$*" >&2
+    exit 1
+}
+
+# ============================================================
+# Requirements
+# ============================================================
+
+command -v podman >/dev/null 2>&1 || fail "Podman is not installed."
+command -v omp >/dev/null 2>&1 || fail "OMP is not installed."
+command -v ss >/dev/null 2>&1 || fail "Install iproute2 (ss is required)."
+
+(( $# == 0 )) || fail "Run dev-container without arguments to open the workspace menu."
+
+[[ -d "$WORKSPACES_DIR" ]] || \
+    fail "Workspace directory does not exist: $WORKSPACES_DIR"
+
+# ============================================================
+# Scan workspaces
+# ============================================================
+
+# Only scan immediate, non-hidden directories.
+# Files such as Dockerfile are ignored.
+
+mapfile -d '' -t WORKSPACES < <(
+    find "$WORKSPACES_DIR" \
+        -mindepth 1 -maxdepth 1 \
+        -type d ! -name '.*' \
+        -printf '%f\0' | sort -z
+)
+
+((${#WORKSPACES[@]} > 0)) || \
+    fail "No workspace directories found in: $WORKSPACES_DIR"
+
+# ============================================================
+# Workspace selection
+# ============================================================
+
+[[ -t 0 ]] || \
+    fail "Interactive selection requires a terminal."
+
+printf '\nAvailable workspaces:\n\n'
+
+for i in "${!WORKSPACES[@]}"; do
+    printf '  %2d) %s\n' "$((i + 1))" "${WORKSPACES[$i]}"
+done
+
+printf '\n'
+
+while true; do
+    read -r -p "Select workspace number (or q to quit): " SELECTION || exit 0
+
+    case "${SELECTION,,}" in
+        q|quit|exit)
+            echo "Cancelled."
+            exit 0
+            ;;
+    esac
+
+    [[ "$SELECTION" =~ ^[0-9]+$ ]] || {
+        echo "Invalid selection."
+        continue
+    }
+
+    SELECTION_NUMBER=$((10#$SELECTION))
+
+    if (( SELECTION_NUMBER < 1 || SELECTION_NUMBER > ${#WORKSPACES[@]} )); then
+        echo "Choose a number between 1 and ${#WORKSPACES[@]}."
+        continue
+    fi
+
+    break
+done
+
+WORKSPACE_NAME="${WORKSPACES[$((SELECTION_NUMBER - 1))]}"
+
+PROJECT_DIR="$WORKSPACES_DIR/$WORKSPACE_NAME"
+CONTAINER_NAME="$CONTAINER_PREFIX-$WORKSPACE_NAME"
+
+[[ "$WORKSPACE_NAME" =~ ^[a-zA-Z0-9][a-zA-Z0-9_.-]*$ ]] || \
+    fail "Invalid workspace name: $WORKSPACE_NAME"
+
+# ============================================================
+# OMP configuration
+# ============================================================
+
+OMP_CONFIG_DIR="$(omp config path)"
+
+[[ -n "$OMP_CONFIG_DIR" ]] || \
+    fail "OMP returned an empty configuration path."
+
+[[ -d "$OMP_CONFIG_DIR" ]] || \
+    fail "OMP configuration not found: $OMP_CONFIG_DIR"
+
+podman image exists "$IMAGE" || \
+    fail "Container image not found: $IMAGE"
+
+# ============================================================
+# Existing container check
+# ============================================================
+
+if podman container exists "$CONTAINER_NAME"; then
+    STATUS="$(podman inspect \
+        --format '{{.State.Status}}' \
+        "$CONTAINER_NAME" 2>/dev/null || echo unknown)"
+
+    fail "Container $CONTAINER_NAME already exists (status: $STATUS). Inspect with podman ps -a or remove with podman rm -f $CONTAINER_NAME."
+fi
+
+# ============================================================
+# Allocate unique available ports
+# ============================================================
+
+port_is_free() {
+    local listeners
+
+    listeners="$(ss -H -ltn "sport = :$1" 2>/dev/null)" || return 1
+
+    [[ -z "$listeners" ]]
+}
+
+PORT_OFFSET=""
+
+for ((offset = 0; offset <= MAX_PORT_OFFSET; offset += PORT_STEP)); do
+
+    CANDIDATE_OMP=$((BASE_OMP_PORT + offset))
+    CANDIDATE_VITE=$((BASE_VITE_PORT + offset))
+    CANDIDATE_API=$((BASE_API_PORT + offset))
+
+    if port_is_free "$CANDIDATE_OMP" &&
+       port_is_free "$CANDIDATE_VITE" &&
+       port_is_free "$CANDIDATE_API"; then
+
+        PORT_OFFSET="$offset"
+
+        PORT_OMP="$CANDIDATE_OMP"
+        PORT_VITE="$CANDIDATE_VITE"
+        PORT_API="$CANDIDATE_API"
+
+        break
+    fi
+done
+
+[[ -n "$PORT_OFFSET" ]] || \
+    fail "No available port allocation found."
+
+# ============================================================
+# Herdr OMP integration
+# ============================================================
+
+HERDR_MOUNT_ARGS=()
+
+if [[ "${HERDR_ENV:-}" == "1" ]]; then
+
+    [[ -n "${HERDR_PANE_ID:-}" ]] || \
+        fail "HERDR_PANE_ID is missing."
+
+    [[ -n "${HERDR_SOCKET_PATH:-}" ]] || \
+        fail "HERDR_SOCKET_PATH is missing."
+
+    [[ -S "$HERDR_SOCKET_PATH" ]] || \
+        fail "Herdr socket not found: $HERDR_SOCKET_PATH"
+
+    HERDR_OMP_EXTENSION="$OMP_CONFIG_DIR/extensions/herdr-omp-agent-state.ts"
+
+    [[ -f "$HERDR_OMP_EXTENSION" ]] || \
+        fail "Install the OMP integration with: herdr integration install omp"
+
+    # Expose only the active Herdr socket.
+    HERDR_MOUNT_ARGS+=(
+        --mount "type=bind,src=$HERDR_SOCKET_PATH,dst=/run/herdr.sock"
+        --env HERDR_ENV=1
+        --env "HERDR_PANE_ID=$HERDR_PANE_ID"
+        --env HERDR_SOCKET_PATH=/run/herdr.sock
+    )
+fi
+
+# ============================================================
+# Display configuration
+# ============================================================
+
+printf '\nStarting development environment...\n\n'
+
+printf 'Workspace:  %s\n' "$WORKSPACE_NAME"
+printf 'Container:  %s\n' "$CONTAINER_NAME"
+printf 'Image:      %s\n' "$IMAGE"
+printf 'Project:    %s\n' "$PROJECT_DIR"
+printf 'OMP config: %s\n' "$OMP_CONFIG_DIR"
+
+printf '\nAllocated ports:\n'
+printf '  OMP:      127.0.0.1:%s -> 3000\n' "$PORT_OMP"
+printf '  Vite:     127.0.0.1:%s -> 5173\n' "$PORT_VITE"
+printf '  API:      127.0.0.1:%s -> 8000\n\n' "$PORT_API"
+
+# ============================================================
+# Podman configuration
+# ============================================================
+
+PODMAN_ARGS=(
+    run
+    --rm
+    -it
+
+    --name "$CONTAINER_NAME"
+
+    --userns="keep-id:uid=$CONTAINER_UID,gid=$CONTAINER_GID"
+
+    --cap-drop=ALL
+    --security-opt=no-new-privileges
+    --pids-limit=512
+
+    --publish "127.0.0.1:${PORT_OMP}:3000"
+    --publish "127.0.0.1:${PORT_VITE}:5173"
+    --publish "127.0.0.1:${PORT_API}:8000"
+
+    --mount "type=bind,src=$PROJECT_DIR,dst=/workspace,rw"
+
+    --mount "type=bind,src=$OMP_CONFIG_DIR,dst=/home/dev/.omp/agent,rw"
+
+    --workdir=/workspace
+
+    --env PI_CODING_AGENT_DIR=/home/dev/.omp/agent
+
+    "${HERDR_MOUNT_ARGS[@]}"
+)
+
+# ============================================================
+# Launch
+# ============================================================
+
+# Herdr must identify the host-side Podman wrapper as OMP.
+if [[ "${HERDR_ENV:-}" == "1" ]]; then
+    HERDR_AGENT=omp exec podman "${PODMAN_ARGS[@]}" "$IMAGE" omp
+else
+    exec podman "${PODMAN_ARGS[@]}" "$IMAGE" omp
+fi

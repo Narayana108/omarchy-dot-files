@@ -1,0 +1,135 @@
+# -----------------------------------------------------------------------------
+# Global bashrc config
+# Add your own exports, aliases, and functions here.
+# -----------------------------------------------------------------------------
+
+# -----------------------------------------------------------------------------
+# Path
+# -----------------------------------------------------------------------------
+export PATH="$LLM_TOOLS/llama.cpp/build/bin:$PATH"
+export PATH="$HOME/.cargo/bin:$PATH"
+export GOPATH="$HOME/.local/share/go"
+
+# -----------------------------------------------------------------------------
+# Defaults
+# -----------------------------------------------------------------------------
+export SYSTEMD_EDITOR=nvim
+export VISUAL=nvim
+export EDITOR=nvim
+
+# -----------------------------------------------------------------------------
+# ENV VARS
+# -----------------------------------------------------------------------------
+
+export WIKI_HOME="/data/llms/knowledge_base"
+
+export OMP_DECK_DEFAULT_CWD="/data/llms/projects/"
+export OMP_DECK_DB_PATH="$HOME/.config/omp-deck/deck.db"
+
+export XDG_CONFIG_HOME="$HOME/.config"
+export XDG_DATA_HOME="$HOME/.local/share"
+export XDG_STATE_HOME="$HOME/.local/state"
+export XDG_CACHE_HOME="$HOME/.cache"
+
+# -----------------------------------------------------------------------------
+# LLM/AI Storage
+# -----------------------------------------------------------------------------
+
+# Hugging Face
+export HF_HOME="$LLM_HOME/huggingface"
+export HF_HUB_CACHE="$HF_HOME/hub"
+
+# Ollama
+export OLLAMA_MODELS="$LLM_HOME/ollama"
+
+# Models
+export GGUF_HOME="$LLM_HOME/gguf"
+export LORA_HOME="$LLM_HOME/loras"
+export EMBEDDING_HOME="$LLM_HOME/embeddings"
+
+# Data
+export DATASET_HOME="$LLM_HOME/datasets"
+
+# Tools
+export LLM_TOOLS="$LLM_HOME/tools_configs"
+
+# Optional
+export OUTPUT_HOME="$LLM_HOME/outputs"
+export PROJECT_HOME="$LLM_HOME/projects"
+
+# -----------------------------------------------------------------------------
+# Aliases
+# -----------------------------------------------------------------------------
+alias llama-start="$LLM_TOOLS/llama.cpp/build/bin/llama server --models-preset $LLM_TOOLS/model-configs.ini"
+alias llama_q-start="$LLM_TOOLS/llama-cpp-turboquant/build/bin/llama server --models-preset $LLM_TOOLS/qwen-tq-model-configs.ini --host 0.0.0.0 --metrics"
+alias llama_g-start="$LLM_TOOLS/llama-cpp-turboquant/build/bin/llama server --models-preset $LLM_TOOLS/gemma-tq-model-configs.ini --host 0.0.0.0 --metrics"
+
+alias llama_as-tq-q-start='TURBO_AUTO_ASYMMETRIC=0 \
+    $LLM_TOOLS/llama-cpp-turboquant/build/bin/llama server \
+        --models-preset $LLM_TOOLS/qwen-tq-model-configs.ini \
+        --host 0.0.0.0 \
+        --metrics \
+        --api-key "$LLAMA_API_KEY"'
+
+
+alias krita_launch='QT_SCALE_FACTOR=2 krita-5.3.3-x86_64.AppImage'
+alias openweb_launch='nohup open-webui serve --port 3000 > /tmp/open-webui.log 2>&1 &'
+
+alias \
+  cddot='cd ~/Lab/git/dot-files/' \
+  mpvm='mpv --vo=null --video=no --no-video --term-osd-bar --no-resume-playback'
+
+# lsd
+alias ls='lsd'
+alias l='ls -l'
+alias la='ls -a'
+alias lla='ls -la'
+alias lt='ls --tree'
+
+# -----------------------------------------------------------------------------
+# Functions
+# -----------------------------------------------------------------------------
+
+# Copy pwd to clipboard
+cpwd() {
+    pwd | wl-copy
+}
+
+# Copy text file to clipboard
+cc () {
+  cat $1 | wl-copy
+}
+
+function genpass() {
+  #openssl rand -base64 29 | tr -d "=+/" | cut -c1-25
+  LENGTH=25
+  if [ ! -z "$1" ] && [ $1 -gt 1 ]; then
+    LENGTH=$1
+  fi
+    NUMBYTES=`echo $LENGTH | awk '{print int($1*1.16)+1}'`
+    openssl rand -base64 $NUMBYTES | tr -d "=+/" | cut -c1-$LENGTH
+}
+
+# Check if package is installed
+function cpkg() {
+  check="$(sudo pacman -Qs "$1")" ;
+  if [ -n "${check}" ] ; then
+      echo "$1 is installed";
+  elif [ -z "${check}" ] ; then
+      echo "$1 is NOT installed";
+  fi;
+}
+
+function gac() {
+  if [ -d .git ]; then
+    git status
+    git add .
+    git commit -s -a -m "$1"
+    git push
+  fi;
+}
+
+# Sync dot-files repo with GitHub
+dot-sync() {
+  bash "$DOT_FILES/2-git-sync.sh"
+}
