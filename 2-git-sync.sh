@@ -1,7 +1,9 @@
 #!/bin/bash
 
 # Sync dot-files repos with GitHub (run manually via `dot-sync`).
-gitDirs=("${HOME}/Dev/git/dot-files")
+# The repo is the directory this script lives in.
+baseDir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+gitDirs=("$baseDir")
 
 for dir in "${gitDirs[@]}"; do
     echo -e "\n--> $dir"

@@ -3,12 +3,14 @@
 # Work in Progress !
 #
 
-SOURCE="/home/narayana"
-DESTINATION="/run/media/narayana/agastya_rishi/backup-10-09-23"
+# Override either path from the environment, e.g.
+#   DESTINATION=/run/media/me/backup ./3-full-bkp.sh
+SOURCE="${SOURCE:-$HOME}"
+DESTINATION="${DESTINATION:-/run/media/$USER/backup}"
 EXCLUDE=( .cache .local .bun .deno .ghost \
     .librewolf go Public .wine .telegram-cli \
     .w3m .vmware .steam .npm .mozilla .wpscan )
-#EXCLUDE=( /home/narayana/.cache/ /home/narayana/.local/ )
+#EXCLUDE=( "$HOME/.cache/" "$HOME/.local/" )
 
 #INCLUDE=( '/.vim*' '/.git*' /.ssh .bash_aliases .bashrc )
 #EXCLUDE=( '/VirtualBox_VMs/*/Snapshots'  /snap /Downloads '/.*' )

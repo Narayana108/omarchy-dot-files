@@ -9,9 +9,9 @@
 # Path
 # -----------------------------------------------------------------------------
 
-export PATH="/home/rsi/.cache/.bun/bin:$PATH"
+export PATH="$HOME/.cache/.bun/bin:$PATH"
 
-export PATH="/home/rsi/.opencode/bin:$PATH"
+export PATH="$HOME/.opencode/bin:$PATH"
 
 export PATH="/data/llms/tools_configs/llama.cpp/build/bin:$PATH"
 

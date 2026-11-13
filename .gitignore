@@ -1,0 +1,14 @@
+# Editor / OS cruft
+*.swp
+*~
+.DS_Store
+
+# Logs and scratch output
+*.log
+*.tmp
+
+# Secrets and machine-local overrides
+.env
+.env.*
+*.local
+.luarc.json
