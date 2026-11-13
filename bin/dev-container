@@ -6,7 +6,7 @@ set -Eeuo pipefail
 # ============================================================
 
 IMAGE="localhost/thoth:debian13"
-WORKSPACES_DIR="/data/llms/agent_work_spaces"
+WORKSPACES_DIR="/data/llms/agent_workspaces"
 CONTAINER_PREFIX="thoth"
 
 CONTAINER_UID=1000
@@ -22,6 +22,40 @@ MAX_PORT_OFFSET=57000
 fail() {
     printf 'Error: %s\n' "$*" >&2
     exit 1
+}
+
+# Prompt for a 1-based index into a list of $2 items.
+# Prints the chosen index on stdout; prompts and diagnostics go to stderr.
+prompt_choice() {
+    local prompt="$1"
+    local count="$2"
+    local choice
+
+    while true; do
+        read -r -p "$prompt" choice || return 1
+
+        case "${choice,,}" in
+            q|quit|exit)
+                printf 'Cancelled.\n' >&2
+                return 1
+                ;;
+        esac
+
+        [[ "$choice" =~ ^[0-9]+$ ]] || {
+            printf 'Invalid selection.\n' >&2
+            continue
+        }
+
+        choice=$((10#$choice))
+
+        if (( choice < 1 || choice > count )); then
+            printf 'Choose a number between 1 and %d.\n' "$count" >&2
+            continue
+        fi
+
+        printf '%d\n' "$choice"
+        return 0
+    done
 }
 
 # ============================================================
@@ -54,6 +88,35 @@ mapfile -d '' -t WORKSPACES < <(
 ((${#WORKSPACES[@]} > 0)) || \
     fail "No workspace directories found in: $WORKSPACES_DIR"
 
+# Absolute path of every scanned workspace, indexed like WORKSPACES.
+WORKSPACE_PATHS=()
+
+for WORKSPACE_ENTRY in "${WORKSPACES[@]}"; do
+    WORKSPACE_PATHS+=("$WORKSPACES_DIR/$WORKSPACE_ENTRY")
+done
+
+# Offer the current working directory as the first entry unless the
+# scan already lists it.
+CURRENT_DIR="$(pwd -P)" || \
+    fail "Cannot resolve the current working directory."
+
+CURRENT_DIR_NAME="${CURRENT_DIR##*/}"
+CURRENT_DIR_LISTED=0
+
+for WORKSPACE_PATH in "${WORKSPACE_PATHS[@]}"; do
+    if [[ "$WORKSPACE_PATH" == "$CURRENT_DIR" ]]; then
+        CURRENT_DIR_LISTED=1
+        break
+    fi
+done
+
+if (( CURRENT_DIR_LISTED == 0 )); then
+    [[ -n "$CURRENT_DIR_NAME" ]] || CURRENT_DIR_NAME="/"
+
+    WORKSPACES=("$CURRENT_DIR_NAME" "${WORKSPACES[@]}")
+    WORKSPACE_PATHS=("$CURRENT_DIR" "${WORKSPACE_PATHS[@]}")
+fi
+
 # ============================================================
 # Workspace selection
 # ============================================================
@@ -64,43 +127,44 @@ mapfile -d '' -t WORKSPACES < <(
 printf '\nAvailable workspaces:\n\n'
 
 for i in "${!WORKSPACES[@]}"; do
-    printf '  %2d) %s\n' "$((i + 1))" "${WORKSPACES[$i]}"
+    if [[ "${WORKSPACE_PATHS[$i]}" == "$CURRENT_DIR" ]]; then
+        printf '  %2d) %s (current directory)\n' "$((i + 1))" "${WORKSPACES[$i]}"
+    else
+        printf '  %2d) %s\n' "$((i + 1))" "${WORKSPACES[$i]}"
+    fi
 done
 
 printf '\n'
 
-while true; do
-    read -r -p "Select workspace number (or q to quit): " SELECTION || exit 0
+SELECTION_NUMBER="$(prompt_choice "Select workspace number (or q to quit): " "${#WORKSPACES[@]}")" || exit 0
 
-    case "${SELECTION,,}" in
-        q|quit|exit)
-            echo "Cancelled."
-            exit 0
-            ;;
-    esac
+SELECTED_INDEX=$((SELECTION_NUMBER - 1))
 
-    [[ "$SELECTION" =~ ^[0-9]+$ ]] || {
-        echo "Invalid selection."
-        continue
-    }
-
-    SELECTION_NUMBER=$((10#$SELECTION))
-
-    if (( SELECTION_NUMBER < 1 || SELECTION_NUMBER > ${#WORKSPACES[@]} )); then
-        echo "Choose a number between 1 and ${#WORKSPACES[@]}."
-        continue
-    fi
-
-    break
-done
-
-WORKSPACE_NAME="${WORKSPACES[$((SELECTION_NUMBER - 1))]}"
-
-PROJECT_DIR="$WORKSPACES_DIR/$WORKSPACE_NAME"
+WORKSPACE_NAME="${WORKSPACES[$SELECTED_INDEX]}"
+PROJECT_DIR="${WORKSPACE_PATHS[$SELECTED_INDEX]}"
 CONTAINER_NAME="$CONTAINER_PREFIX-$WORKSPACE_NAME"
 
 [[ "$WORKSPACE_NAME" =~ ^[a-zA-Z0-9][a-zA-Z0-9_.-]*$ ]] || \
     fail "Invalid workspace name: $WORKSPACE_NAME"
+
+# ============================================================
+# Agent harness selection
+# ============================================================
+
+# Harness command executed inside the container, in menu order.
+AGENT_HARNESSES=(omp opencode qoder)
+
+printf '\nAvailable agent harnesses:\n\n'
+
+for i in "${!AGENT_HARNESSES[@]}"; do
+    printf '  %2d) %s\n' "$((i + 1))" "${AGENT_HARNESSES[$i]}"
+done
+
+printf '\n'
+
+HARNESS_NUMBER="$(prompt_choice "Select harness number (or q to quit): " "${#AGENT_HARNESSES[@]}")" || exit 0
+
+HARNESS="${AGENT_HARNESSES[$((HARNESS_NUMBER - 1))]}"
 
 # ============================================================
 # OMP configuration
@@ -116,6 +180,16 @@ OMP_CONFIG_DIR="$(omp config path)"
 
 podman image exists "$IMAGE" || \
     fail "Container image not found: $IMAGE"
+
+# ============================================================
+# Agent harness configuration
+# ============================================================
+
+OPENCODE_CONFIG_DIR="$HOME/.config/opencode"
+OPENCODE_DATA_DIR="$HOME/.local/share/opencode"
+QODER_CONFIG_DIR="$HOME/.qoder"
+
+mkdir -p -- "$OPENCODE_CONFIG_DIR" "$OPENCODE_DATA_DIR" "$QODER_CONFIG_DIR"
 
 # ============================================================
 # Existing container check
@@ -183,10 +257,12 @@ if [[ "${HERDR_ENV:-}" == "1" ]]; then
     [[ -S "$HERDR_SOCKET_PATH" ]] || \
         fail "Herdr socket not found: $HERDR_SOCKET_PATH"
 
-    HERDR_OMP_EXTENSION="$OMP_CONFIG_DIR/extensions/herdr-omp-agent-state.ts"
+    if [[ "$HARNESS" == "omp" ]]; then
+        HERDR_OMP_EXTENSION="$OMP_CONFIG_DIR/extensions/herdr-omp-agent-state.ts"
 
-    [[ -f "$HERDR_OMP_EXTENSION" ]] || \
-        fail "Install the OMP integration with: herdr integration install omp"
+        [[ -f "$HERDR_OMP_EXTENSION" ]] || \
+            fail "Install the OMP integration with: herdr integration install omp"
+    fi
 
     # Expose only the active Herdr socket.
     HERDR_MOUNT_ARGS+=(
@@ -204,10 +280,13 @@ fi
 printf '\nStarting development environment...\n\n'
 
 printf 'Workspace:  %s\n' "$WORKSPACE_NAME"
+printf 'Harness:   %s\n' "$HARNESS"
 printf 'Container:  %s\n' "$CONTAINER_NAME"
 printf 'Image:      %s\n' "$IMAGE"
 printf 'Project:    %s\n' "$PROJECT_DIR"
 printf 'OMP config: %s\n' "$OMP_CONFIG_DIR"
+printf 'OpenCode config: %s\n' "$OPENCODE_CONFIG_DIR"
+printf 'Qoder config:  %s\n' "$QODER_CONFIG_DIR"
 
 printf '\nAllocated ports:\n'
 printf '  OMP:      127.0.0.1:%s -> 3000\n' "$PORT_OMP"
@@ -239,9 +318,14 @@ PODMAN_ARGS=(
 
     --mount "type=bind,src=$OMP_CONFIG_DIR,dst=/home/dev/.omp/agent,rw"
 
+    --mount "type=bind,src=$OPENCODE_CONFIG_DIR,dst=/home/dev/.config/opencode,rw"
+    --mount "type=bind,src=$OPENCODE_DATA_DIR,dst=/home/dev/.local/share/opencode,rw"
+    --mount "type=bind,src=$QODER_CONFIG_DIR,dst=/home/dev/.qoder,rw"
+
     --workdir=/workspace
 
     --env PI_CODING_AGENT_DIR=/home/dev/.omp/agent
+    --env QODER_CONFIG_DIR=/home/dev/.qoder
 
     "${HERDR_MOUNT_ARGS[@]}"
 )
@@ -251,8 +335,8 @@ PODMAN_ARGS=(
 # ============================================================
 
 # Herdr must identify the host-side Podman wrapper as OMP.
-if [[ "${HERDR_ENV:-}" == "1" ]]; then
-    HERDR_AGENT=omp exec podman "${PODMAN_ARGS[@]}" "$IMAGE" omp
+if [[ "${HERDR_ENV:-}" == "1" && "$HARNESS" == "omp" ]]; then
+    HERDR_AGENT=omp exec podman "${PODMAN_ARGS[@]}" "$IMAGE" "$HARNESS"
 else
-    exec podman "${PODMAN_ARGS[@]}" "$IMAGE" omp
+    exec podman "${PODMAN_ARGS[@]}" "$IMAGE" "$HARNESS"
 fi
