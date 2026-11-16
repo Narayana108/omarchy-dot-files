@@ -147,6 +147,10 @@ CONTAINER_NAME="$CONTAINER_PREFIX-$WORKSPACE_NAME"
 [[ "$WORKSPACE_NAME" =~ ^[a-zA-Z0-9][a-zA-Z0-9_.-]*$ ]] || \
     fail "Invalid workspace name: $WORKSPACE_NAME"
 
+# Workspace is bind-mounted below /workspace so the container's working
+# directory is the selected workspace itself, not the mount root.
+CONTAINER_WORKSPACE_DIR="/workspace/$WORKSPACE_NAME"
+
 # ============================================================
 # Agent harness selection
 # ============================================================
@@ -314,7 +318,7 @@ PODMAN_ARGS=(
     --publish "127.0.0.1:${PORT_VITE}:5173"
     --publish "127.0.0.1:${PORT_API}:8000"
 
-    --mount "type=bind,src=$PROJECT_DIR,dst=/workspace,rw"
+    --mount "type=bind,src=$PROJECT_DIR,dst=$CONTAINER_WORKSPACE_DIR,rw"
 
     --mount "type=bind,src=$OMP_CONFIG_DIR,dst=/home/dev/.omp/agent,rw"
 
@@ -322,7 +326,7 @@ PODMAN_ARGS=(
     --mount "type=bind,src=$OPENCODE_DATA_DIR,dst=/home/dev/.local/share/opencode,rw"
     --mount "type=bind,src=$QODER_CONFIG_DIR,dst=/home/dev/.qoder,rw"
 
-    --workdir=/workspace
+    --workdir="$CONTAINER_WORKSPACE_DIR"
 
     --env PI_CODING_AGENT_DIR=/home/dev/.omp/agent
     --env QODER_CONFIG_DIR=/home/dev/.qoder
