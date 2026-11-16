@@ -148,7 +148,8 @@ CONTAINER_NAME="$CONTAINER_PREFIX-$WORKSPACE_NAME"
     fail "Invalid workspace name: $WORKSPACE_NAME"
 
 # Workspace is bind-mounted below /workspace so the container's working
-# directory is the selected workspace itself, not the mount root.
+# directory is the selected workspace itself, not the mount root. Sessions
+# stay container-local: the host's session store is never read or written.
 CONTAINER_WORKSPACE_DIR="/workspace/$WORKSPACE_NAME"
 
 # ============================================================
@@ -209,20 +210,17 @@ podman image exists "$IMAGE" || \
 # ============================================================
 
 # Pass a GitHub token into the container so `gh` and HTTPS `git push`
-# authenticate without any private key in the image. Prefer LLM_GH_TOKEN
-# (the fine-grained PAT exported by ~/.bashrc); otherwise reuse the host
-# gh login.
-GH_TOKEN_VALUE="${LLM_GH_TOKEN:-}"
-
-if [[ -z "$GH_TOKEN_VALUE" ]] && command -v gh >/dev/null 2>&1; then
-    GH_TOKEN_VALUE="$(gh auth token 2>/dev/null || true)"
-fi
+# authenticate without any private key in the image. Only an explicitly
+# exported token is forwarded: never fall back to `gh auth token`, which is the
+# host's broad OAuth credential and would widen the blast radius for a
+# sandboxed agent.
+GH_TOKEN_VALUE="${LLM_GH_TOKEN:-${GH_TOKEN:-}}"
 
 if [[ -n "$GH_TOKEN_VALUE" ]]; then
     export GH_TOKEN="$GH_TOKEN_VALUE"
 else
     printf 'Warning: no GitHub token found; HTTPS git push will not authenticate.\n' >&2
-    printf '         Run `gh auth login` on the host or set LLM_GH_TOKEN.\n' >&2
+    printf '         Export LLM_GH_TOKEN with a fine-grained PAT to enable it.\n' >&2
 fi
 
 # ============================================================
@@ -234,6 +232,18 @@ OPENCODE_DATA_DIR="$HOME/.local/share/opencode"
 QODER_CONFIG_DIR="$HOME/.qoder"
 
 mkdir -p -- "$OPENCODE_CONFIG_DIR" "$OPENCODE_DATA_DIR" "$QODER_CONFIG_DIR"
+
+# Paths the host harness loads as code. Mount them read-only over the writable
+# config mounts so a compromised agent inside the container cannot plant an
+# extension, agent, or plugin that runs on the host at its next start.
+OMP_READONLY_MOUNTS=()
+
+for OMP_CODE_DIR in extensions managed-skills agents; do
+    [[ -d "$OMP_CONFIG_DIR/$OMP_CODE_DIR" ]] || continue
+    OMP_READONLY_MOUNTS+=(
+        --mount "type=bind,src=$OMP_CONFIG_DIR/$OMP_CODE_DIR,dst=/home/dev/.omp/agent/$OMP_CODE_DIR,ro"
+    )
+done
 
 # ============================================================
 # Existing container check
@@ -374,9 +384,11 @@ PODMAN_ARGS=(
 
     --mount "type=bind,src=$OMP_CONFIG_DIR,dst=/home/dev/.omp/agent,rw"
 
-    --mount "type=bind,src=$OPENCODE_CONFIG_DIR,dst=/home/dev/.config/opencode,rw"
+    --mount "type=bind,src=$OPENCODE_CONFIG_DIR,dst=/home/dev/.config/opencode,ro"
     --mount "type=bind,src=$OPENCODE_DATA_DIR,dst=/home/dev/.local/share/opencode,rw"
     --mount "type=bind,src=$QODER_CONFIG_DIR,dst=/home/dev/.qoder,rw"
+
+    "${OMP_READONLY_MOUNTS[@]}"
 
     --workdir="$CONTAINER_WORKSPACE_DIR"
 

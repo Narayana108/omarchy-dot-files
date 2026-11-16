@@ -100,10 +100,17 @@ upwards in steps of `1000`, picking the first free triple.
 
 ## GitHub authentication
 
-`dev-container` reads a token from `LLM_GH_TOKEN` (a fine-grained PAT) and falls
-back to `gh auth token`, exports it as `GH_TOKEN`, and passes it into the
-container with `--env GH_TOKEN`. The value is copied from the host environment;
-it is never written to the image or to `~/.gitconfig`.
+`dev-container` forwards a token only when you export one explicitly, as
+`LLM_GH_TOKEN` (preferred) or `GH_TOKEN`. It never calls `gh auth token`: that
+returns the host's broad OAuth credential, and handing it to a sandboxed agent
+widens the blast radius for no reason. Use a fine-grained PAT scoped to the
+repositories the agent needs (`Contents: Read and write`, plus `Metadata: Read`
+and any of `Pull requests` / `Issues` / `Workflows` you want it to touch), with
+an expiration.
+
+The value is copied from the host environment with `--env GH_TOKEN`; it is
+never written to the image or to `~/.gitconfig`, and it does not appear in the
+container's argv.
 
 The image installs `gh` and sets a global credential helper:
 
@@ -130,6 +137,56 @@ harnesses support it:
 Sessions are keyed by the container working directory
 (`/workspace/<workspace-name>`), so a session started in one workspace is not
 offered in another. Answering `n` starts a fresh session.
+
+Sessions are **container-local**. The harness config directories are shared
+with the host, but the working directory is not, so a host session and a
+container session for the same repository live in different buckets and cannot
+resume each other. That is deliberate: it keeps the container from reading or
+rewriting the host's conversation history.
+
+## Security
+
+The container is an isolation boundary, not a second host.
+
+- Runs as unprivileged `dev` (uid/gid `1000`) with `--userns=keep-id`, so files
+  it writes in the workspace are owned by your host uid and it cannot act as
+  root on the host.
+- `--cap-drop=ALL`, `--security-opt=no-new-privileges`, `--pids-limit=512`.
+- Ports are published on `127.0.0.1` only.
+- No SSH agent, no `~/.ssh`, no host keyring, no Docker/Podman socket.
+- `GH_TOKEN` is the only credential forwarded, and only when you export it
+  explicitly. It is a fine-grained PAT, not the host's broad OAuth token.
+
+Paths the host harness loads as code are mounted **read-only** over the
+writable config mounts, so a compromised agent cannot plant something that runs
+on the host at its next start:
+
+| Path | Why |
+|---|---|
+| `~/.omp/agent/extensions` | OMP loads and executes these |
+| `~/.omp/agent/managed-skills` | skills become agent instructions |
+| `~/.omp/agent/agents` | agent definitions shape host behaviour |
+| `~/.config/opencode` | OpenCode loads `plugins/`, `tui.jsonc`, and `opencode.json` from here |
+
+Creating an extension, skill, agent, or OpenCode plugin from inside the
+container therefore fails; do that on the host.
+
+Residual risks to keep in mind:
+
+- The harness config directories are shared read-write so sessions and auth
+  work. They contain provider credentials (`agent.db`, `auth.json`); treat the
+  container as the same trust domain as your host user for those.
+- `~/.omp/agent/config.yml` and `~/.omp/agent/models.yml` remain writable. A
+  compromised agent could add a hook or redirect a provider there; review them
+  if you do not trust what ran in the container.
+- `~/.omp/agent/memories` and `~/.omp/agent/agent.db` are writable, so the
+  container can add memories or read the host's provider credentials. Treat
+  those as the same trust domain as your host user.
+- The workspace is read-write, including `.git`. A compromised agent can change
+  hooks or history; review before running host-side git commands.
+- Network egress is unrestricted, so a compromised agent can exfiltrate
+  anything it can read. The read-only mounts above reduce what it can *plant*,
+  not what it can *send*.
 
 ## Rebuilding
 
