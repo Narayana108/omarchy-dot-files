@@ -27,6 +27,7 @@ upstream publishes one:
 |---|---|---|
 | Node.js + npm | `26.13.0` (ARG) | `nodejs.org/dist`, verified against `SHASUMS256.txt` |
 | Go | `1.27.4` (ARG) | `go.dev/dl`, verified against `GO_SHA256` |
+| GitHub CLI (`gh`) | `2.104.0` (ARG) | `github.com/cli/cli` release tarball, verified against `GH_SHA256` |
 | Bun | `1.4.4` (ARG) | `bun.com/install` |
 | OMP (`@oh-my-pi/pi-coding-agent`) | latest at build time | `bun install -g` |
 | OpenCode | latest at build time | `opencode.ai/install` |
@@ -81,6 +82,10 @@ throwaway home keeps `/home/dev/.qoder` a pure mount target and leaves
 | `~/.local/share/opencode` | `/home/dev/.local/share/opencode` |
 | `~/.qoder` | `/home/dev/.qoder` |
 
+`GH_TOKEN` is passed through from the host environment (see
+[GitHub authentication](#github-authentication)) so `gh` and HTTPS `git push`
+authenticate without any credential in the image.
+
 The container runs with `--cap-drop=ALL`, `--security-opt=no-new-privileges`,
 `--pids-limit=512`, and publishes three ports on `127.0.0.1` only:
 
@@ -92,6 +97,39 @@ The container runs with `--cap-drop=ALL`, `--security-opt=no-new-privileges`,
 
 `dev-container` allocates the host side of each from `3000`/`5173`/`8000`
 upwards in steps of `1000`, picking the first free triple.
+
+## GitHub authentication
+
+`dev-container` reads a token from `LLM_GH_TOKEN` (a fine-grained PAT) and falls
+back to `gh auth token`, exports it as `GH_TOKEN`, and passes it into the
+container with `--env GH_TOKEN`. The value is copied from the host environment;
+it is never written to the image or to `~/.gitconfig`.
+
+The image installs `gh` and sets a global credential helper:
+
+```bash
+git config --global credential.https://github.com.helper '!gh auth git-credential'
+```
+
+so HTTPS `git push` authenticates through `GH_TOKEN`. SSH remotes
+(`git@github.com:…`) ignore the token — switch them to HTTPS or clone with `gh`
+to push from inside the container.
+
+## Session resume
+
+`dev-container` asks whether to resume the most recent session in the selected
+workspace and, on `y`, launches the harness with `--continue`. All three
+harnesses support it:
+
+| Harness | Flag |
+|---|---|
+| OMP | `--continue` |
+| OpenCode | `--continue` |
+| Qoder | `--continue` |
+
+Sessions are keyed by the container working directory
+(`/workspace/<workspace-name>`), so a session started in one workspace is not
+offered in another. Answering `n` starts a fresh session.
 
 ## Rebuilding
 

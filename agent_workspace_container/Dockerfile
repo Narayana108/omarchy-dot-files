@@ -5,6 +5,8 @@ ARG NODE_VERSION=26.13.0
 ARG GO_VERSION=1.27.4
 ARG GO_SHA256=7226736c2339719cda28fbf3a54d71aa63bcefe376e98cef00034268dab24840
 ARG BUN_VERSION=1.4.4
+ARG GH_VERSION=2.104.0
+ARG GH_SHA256=98cb101ad87dbbd3f6b2f2bfcbd43197ccd07643140121d8a9cfaa91eadbc24e
 
 ENV DEBIAN_FRONTEND=noninteractive
 
@@ -51,6 +53,16 @@ RUN set -eux; \
     tar -C /usr/local -xzf /tmp/go.tar.gz; \
     rm /tmp/go.tar.gz
 
+# Install GitHub CLI (gh) from the official release tarball and verify checksum
+RUN set -eux; \
+    cd /tmp; \
+    GH_ARCHIVE="gh_${GH_VERSION}_linux_amd64.tar.gz"; \
+    curl -fsSLO "https://github.com/cli/cli/releases/download/v${GH_VERSION}/${GH_ARCHIVE}"; \
+    echo "${GH_SHA256}  ${GH_ARCHIVE}" | sha256sum -c -; \
+    tar -xzf "${GH_ARCHIVE}" -C /usr/local --strip-components=1 --no-same-owner; \
+    rm -f "${GH_ARCHIVE}"; \
+    gh --version
+
 # Create unprivileged development user
 RUN groupadd --gid 1000 dev \
     && useradd \
@@ -84,6 +96,9 @@ ENV PATH="/home/dev/.bun/bin:/home/dev/.npm-global/bin:/home/dev/.opencode/bin:/
 
 # Run development tools as unprivileged user
 USER dev
+
+# Authenticate HTTPS git pushes through gh using GH_TOKEN from the runtime env.
+RUN git config --global "credential.https://github.com.helper" "!gh auth git-credential"
 
 # Install Bun and OMP
 RUN curl -fsSL https://bun.com/install | bash -s "bun-v${BUN_VERSION}" \

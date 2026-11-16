@@ -171,6 +171,25 @@ HARNESS_NUMBER="$(prompt_choice "Select harness number (or q to quit): " "${#AGE
 HARNESS="${AGENT_HARNESSES[$((HARNESS_NUMBER - 1))]}"
 
 # ============================================================
+# Session resume
+# ============================================================
+
+# Every harness accepts --continue: it reopens the most recent session
+# for the current working directory and starts a new one if none exists.
+HARNESS_ARGS=()
+
+printf '\nResume the most recent session in this workspace? [y/N] ' >&2
+
+RESUME_ANSWER=""
+read -r RESUME_ANSWER || true
+
+case "${RESUME_ANSWER,,}" in
+    y|yes)
+        HARNESS_ARGS+=(--continue)
+        ;;
+esac
+
+# ============================================================
 # OMP configuration
 # ============================================================
 
@@ -184,6 +203,27 @@ OMP_CONFIG_DIR="$(omp config path)"
 
 podman image exists "$IMAGE" || \
     fail "Container image not found: $IMAGE"
+
+# ============================================================
+# GitHub CLI authentication
+# ============================================================
+
+# Pass a GitHub token into the container so `gh` and HTTPS `git push`
+# authenticate without any private key in the image. Prefer LLM_GH_TOKEN
+# (the fine-grained PAT exported by ~/.bashrc); otherwise reuse the host
+# gh login.
+GH_TOKEN_VALUE="${LLM_GH_TOKEN:-}"
+
+if [[ -z "$GH_TOKEN_VALUE" ]] && command -v gh >/dev/null 2>&1; then
+    GH_TOKEN_VALUE="$(gh auth token 2>/dev/null || true)"
+fi
+
+if [[ -n "$GH_TOKEN_VALUE" ]]; then
+    export GH_TOKEN="$GH_TOKEN_VALUE"
+else
+    printf 'Warning: no GitHub token found; HTTPS git push will not authenticate.\n' >&2
+    printf '         Run `gh auth login` on the host or set LLM_GH_TOKEN.\n' >&2
+fi
 
 # ============================================================
 # Agent harness configuration
@@ -285,12 +325,24 @@ printf '\nStarting development environment...\n\n'
 
 printf 'Workspace:  %s\n' "$WORKSPACE_NAME"
 printf 'Harness:   %s\n' "$HARNESS"
+
+if (( ${#HARNESS_ARGS[@]} > 0 )); then
+    printf 'Session:   resume most recent\n'
+else
+    printf 'Session:   new\n'
+fi
 printf 'Container:  %s\n' "$CONTAINER_NAME"
 printf 'Image:      %s\n' "$IMAGE"
 printf 'Project:    %s\n' "$PROJECT_DIR"
 printf 'OMP config: %s\n' "$OMP_CONFIG_DIR"
 printf 'OpenCode config: %s\n' "$OPENCODE_CONFIG_DIR"
 printf 'Qoder config:  %s\n' "$QODER_CONFIG_DIR"
+
+if [[ -n "$GH_TOKEN_VALUE" ]]; then
+    printf 'GitHub:     authenticated (GH_TOKEN)\n'
+else
+    printf 'GitHub:     not authenticated\n'
+fi
 
 printf '\nAllocated ports:\n'
 printf '  OMP:      127.0.0.1:%s -> 3000\n' "$PORT_OMP"
@@ -334,13 +386,17 @@ PODMAN_ARGS=(
     "${HERDR_MOUNT_ARGS[@]}"
 )
 
+if [[ -n "$GH_TOKEN_VALUE" ]]; then
+    PODMAN_ARGS+=(--env GH_TOKEN)
+fi
+
 # ============================================================
 # Launch
 # ============================================================
 
 # Herdr must identify the host-side Podman wrapper as OMP.
 if [[ "${HERDR_ENV:-}" == "1" && "$HARNESS" == "omp" ]]; then
-    HERDR_AGENT=omp exec podman "${PODMAN_ARGS[@]}" "$IMAGE" "$HARNESS"
+    HERDR_AGENT=omp exec podman "${PODMAN_ARGS[@]}" "$IMAGE" "$HARNESS" "${HARNESS_ARGS[@]}"
 else
-    exec podman "${PODMAN_ARGS[@]}" "$IMAGE" "$HARNESS"
+    exec podman "${PODMAN_ARGS[@]}" "$IMAGE" "$HARNESS" "${HARNESS_ARGS[@]}"
 fi
