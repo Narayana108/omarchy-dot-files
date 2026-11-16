@@ -72,15 +72,22 @@ throwaway home keeps `/home/dev/.qoder` a pure mount target and leaves
 
 ## How `dev-container` uses it
 
-`bin/dev-container` mounts, read-write:
+`bin/dev-container` mounts:
 
-| Host | Container |
-|---|---|
-| selected workspace directory | `/workspace/<workspace-name>` (also the working directory) |
-| `$(omp config path)` | `/home/dev/.omp/agent` |
-| `~/.config/opencode` | `/home/dev/.config/opencode` |
-| `~/.local/share/opencode` | `/home/dev/.local/share/opencode` |
-| `~/.qoder` | `/home/dev/.qoder` |
+| Host | Container | Mode |
+|---|---|---|
+| selected workspace directory | `/workspace/<workspace-name>` (also the working directory) | rw |
+| `$(omp config path)` | `/home/dev/.omp/agent` | rw |
+| `$(omp config path)/extensions` | `/home/dev/.omp/agent/extensions` | ro |
+| `$(omp config path)/managed-skills` | `/home/dev/.omp/agent/managed-skills` | ro |
+| `$(omp config path)/agents` | `/home/dev/.omp/agent/agents` | ro |
+| `~/.config/opencode` | `/home/dev/.config/opencode` | ro |
+| `~/.local/share/opencode` | `/home/dev/.local/share/opencode` | rw |
+| `~/.qoder` | `/home/dev/.qoder` | rw |
+
+The read-only entries shadow the writable config mounts: the harness can read
+its extensions, skills, agents, and OpenCode config, but cannot replace them
+with code the host would execute.
 
 `GH_TOKEN` is passed through from the host environment (see
 [GitHub authentication](#github-authentication)) so `gh` and HTTPS `git push`
