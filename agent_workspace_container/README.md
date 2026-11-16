@@ -81,6 +81,9 @@ throwaway home keeps `/home/dev/.qoder` a pure mount target and leaves
 | `$(omp config path)/extensions` | `/home/dev/.omp/agent/extensions` | ro |
 | `$(omp config path)/managed-skills` | `/home/dev/.omp/agent/managed-skills` | ro |
 | `$(omp config path)/agents` | `/home/dev/.omp/agent/agents` | ro |
+| `$(omp config path)/memories` | `/home/dev/.omp/agent/memories` | ro |
+| `$(omp config path)/config.yml` | `/home/dev/.omp/agent/config.yml` | ro |
+| `$(omp config path)/models.yml` | `/home/dev/.omp/agent/models.yml` | ro |
 | `~/.config/opencode` | `/home/dev/.config/opencode` | ro |
 | `~/.local/share/opencode` | `/home/dev/.local/share/opencode` | rw |
 | `~/.qoder` | `/home/dev/.qoder` | rw |
@@ -180,20 +183,20 @@ container therefore fails; do that on the host.
 
 Residual risks to keep in mind:
 
-- The harness config directories are shared read-write so sessions and auth
-  work. They contain provider credentials (`agent.db`, `auth.json`); treat the
+- The harness data directories are shared read-write so sessions and auth work.
+  They contain provider credentials (`agent.db`, `auth.json`); treat the
   container as the same trust domain as your host user for those.
-- `~/.omp/agent/config.yml` and `~/.omp/agent/models.yml` remain writable. A
-  compromised agent could add a hook or redirect a provider there; review them
-  if you do not trust what ran in the container.
-- `~/.omp/agent/memories` and `~/.omp/agent/agent.db` are writable, so the
-  container can add memories or read the host's provider credentials. Treat
-  those as the same trust domain as your host user.
+- `~/.omp/agent/agent.db`, `history.db`, `usage.db`, `sessions`, `blobs`, and
+  `terminal-sessions` remain writable. A compromised agent can read the stored
+  provider credentials and rewrite conversation history. The read-only
+  overlays above stop it from planting *new* code, not from reading or
+  corrupting existing state.
 - The workspace is read-write, including `.git`. A compromised agent can change
-  hooks or history; review before running host-side git commands.
-- Network egress is unrestricted, so a compromised agent can exfiltrate
-  anything it can read. The read-only mounts above reduce what it can *plant*,
-  not what it can *send*.
+  hooks, `core.hooksPath`, or history; review before running host-side git
+  commands.
+- Network egress is unrestricted by design: the harness needs to browse the
+  web. A compromised agent can therefore exfiltrate anything it can read. The
+  read-only mounts reduce what it can *plant*, not what it can *send*.
 
 ## Rebuilding
 

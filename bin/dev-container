@@ -238,10 +238,17 @@ mkdir -p -- "$OPENCODE_CONFIG_DIR" "$OPENCODE_DATA_DIR" "$QODER_CONFIG_DIR"
 # extension, agent, or plugin that runs on the host at its next start.
 OMP_READONLY_MOUNTS=()
 
-for OMP_CODE_DIR in extensions managed-skills agents; do
+for OMP_CODE_DIR in extensions managed-skills agents memories; do
     [[ -d "$OMP_CONFIG_DIR/$OMP_CODE_DIR" ]] || continue
     OMP_READONLY_MOUNTS+=(
         --mount "type=bind,src=$OMP_CONFIG_DIR/$OMP_CODE_DIR,dst=/home/dev/.omp/agent/$OMP_CODE_DIR,ro"
+    )
+done
+
+for OMP_CODE_FILE in config.yml models.yml; do
+    [[ -f "$OMP_CONFIG_DIR/$OMP_CODE_FILE" ]] || continue
+    OMP_READONLY_MOUNTS+=(
+        --mount "type=bind,src=$OMP_CONFIG_DIR/$OMP_CODE_FILE,dst=/home/dev/.omp/agent/$OMP_CODE_FILE,ro"
     )
 done
 
