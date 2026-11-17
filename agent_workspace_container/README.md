@@ -44,12 +44,13 @@ an agent reaches for:
 
 | Area | Tools |
 |---|---|
-| Search | `rg` (ripgrep), `fd`, `fzf`, `tree`, `cloc`, `tokei` |
+| Search | `rg` (ripgrep), `fd`, `fzf`, `tree`, `tokei` |
 | Read | `bat`, `less`, `file`, `xxd`, `jq`, `yq`, `sqlite3` |
-| Edit/run | `vim`, `tmux`, `entr`, `inotifywait`, `parallel`, `moreutils` (`sponge`, `ts`, `vipe`, `ifne`), `pv`, `bc`, `time`, `hyperfine` |
-| Network | `curl`, `wget`, `rsync`, `dig`, `nc`, `lsof`, `strace`, `htop` |
+| Edit/run | `vim`, `tmux`, `entr`, `inotifywait`, `parallel`, `moreutils` (`sponge`, `ts`, `vipe`, `ifne`), `pv`, `bc`, `time` |
+| Network | `curl`, `wget`, `rsync`, `dig`, `nc`, `lsof`, `strace` |
 | Git | `gh`, `git-lfs`, `git-filter-repo`, `delta` |
-| Python | `uv`, `ruff` |
+| Python | `uv`, `ruff`, `sqlfluff` |
+| PHP | `php`, `composer`, `wp`, `phpcs`, `phpstan`, `php-cs-fixer`, `phpunit` |
 | Shell | `shellcheck`, `shfmt` |
 | Terminal | `ncurses-term` (kitty/wezterm terminfo) |
 
@@ -59,21 +60,77 @@ Debian ships `fd` as `fdfind` and `bat` as `batcat`; the image adds `fd` and
 OMP's LSP tool auto-detects servers on `PATH`. The image installs the ones for
 the stacks here:
 
-| Kind | Tools |
+| Language | Server(s) |
 |---|---|
-| Shell | `bash-language-server`, `shellcheck`, `shfmt` |
+| Go | `gopls` (plus the Go toolchain) |
+| Rust | `rust-analyzer`, `cargo`, `rustc` |
+| TypeScript | `typescript-language-server`, `tsc` |
+| JavaScript | `typescript-language-server`, `tsc` |
+| Node.js | `node`, `npm` (runtime; TS/JS server above) |
 | Python | `pyright-langserver`, `basedpyright-langserver`, `pylsp`, `ruff`, `uv` |
-| TypeScript/JS | `typescript-language-server`, `tsc`, `biome`, `eslint`, `prettier` |
-| Web | `vscode-html-language-server`, `vscode-css-language-server`, `vscode-json-language-server`, `vscode-eslint-language-server`, `tailwindcss-language-server`, `svelteserver`, `vue-language-server`, `astro-ls`, `emmet-language-server` |
-| Data/config | `yaml-language-server`, `yamllint`, `ansible-language-server`, `ansible-lint`, `graphql-lsp`, `prisma-language-server` |
-| Other | `intelephense` (PHP), `docker-langserver`, `vim-language-server`, `gopls`, `rust-analyzer`, `clangd`, `clang-format`, `rubocop`, `markdownlint-cli2` |
+| Shell / Bash | `bash-language-server`, `shellcheck`, `shfmt` |
+| YAML | `yaml-language-server`, `yamllint` |
+| JSON | `vscode-json-language-server` |
+| TOML | `taplo` |
+| Svelte | `svelteserver` |
+| Tailwind CSS | `tailwindcss-language-server` |
+| HTML / CSS | `vscode-html-language-server`, `vscode-css-language-server` |
+| ESLint | `vscode-eslint-language-server`, `eslint` |
+| Prettier | `prettier` |
+| Vue | `vue-language-server` |
+| Astro | `astro-ls` |
+| Emmet | `emmet-language-server` |
+| Markdown | `markdownlint-cli2` (linter; no `marksman` LSP) |
+| Ansible | `ansible-language-server`, `ansible-lint` |
+| GraphQL | `graphql-lsp` |
+| Prisma | `prisma-language-server` |
+| PHP / WordPress | `intelephense`, `php`, `composer`, `wp`, `phpcs`, `phpstan`, `php-cs-fixer`, `phpunit` |
+| Ruby | `rubocop` (linter; no `ruby-lsp`/`solargraph`) |
+| Dockerfile | `docker-langserver` |
+| Vimscript | `vim-language-server` |
+| C / C++ | `clangd`, `clang-format` |
+| SQL | `sqls`, `sqlfluff` |
+
+`taplo` and `sqls` are not in OMP's built-in `defaults.json`, so the image
+registers them in `/home/dev/lsp.json`:
+
+```json
+{
+  "taplo": {
+    "command": "taplo",
+    "args": ["lsp", "stdio"],
+    "fileTypes": [".toml"],
+    "rootMarkers": [".git", "Cargo.toml", "pyproject.toml"]
+  },
+  "sqls": {
+    "command": "sqls",
+    "args": ["-stdio"],
+    "fileTypes": [".sql"],
+    "rootMarkers": [".git", ".sqls.yml"]
+  }
+}
+```
+
+`sqls` reads `.sqls.yml` for the database connection/dialect; without one it
+still offers basic completion. `sqlfluff` is the CLI linter/formatter
+(`sqlfluff lint`, `sqlfluff fix`, `sqlfluff format`).
+
+WordPress work has `php` (8.4), `composer`, `wp` (WP-CLI), `phpcs` (PHP
+CodeSniffer), `phpstan`, `php-cs-fixer`, and `phpunit`. WP-CLI runs as `dev`;
+pass `--allow-root` only if you deliberately run it as root. Install the
+WordPress coding standard with:
+
+```bash
+composer global require wp-coding-standards/wpcs
+phpcs --config-set installed_paths "$HOME/.config/composer/vendor/wp-coding-standards/wpcs"
+```
 
 Not installed: `marksman`, `lua-language-server`, `terraform-ls`, `helm-ls`,
 `nixd`, `nil`, `zls`, `texlab`, `phpactor`, `jdtls`, `kotlin-lsp`, `metals`,
 `haskell-language-server-wrapper`, `ocamllsp`, `elixir-ls`, `expert`,
 `erlang_ls`, `gleam`, `dart`, `sourcekit-lsp`, `swiftlint`, `tlapm_lsp`, `ols`,
-`omnisharp`, `hadolint`, `tflint`. Add them on demand; most pull a language
-toolchain.
+`omnisharp`, `hadolint`, `tflint`, `ruby-lsp`, `solargraph`. Add them on demand;
+most pull a language toolchain.
 
 The toolchains and harnesses are pinned through `ARG`s so a rebuild is
 reproducible; apt packages follow the Debian 13 release. Bump the versions

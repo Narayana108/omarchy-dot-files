@@ -66,13 +66,14 @@ cd agent_workspace_container && podman build -t localhost/thoth:debian13 .
 See [agent_workspace_container/README.md](agent_workspace_container/README.md)
 for what goes into the image and how the mounts are laid out. The image carries
 the usual CLI tooling — `rg`, `fd`, `bat`, `fzf`, `jq`, `yq`, `sqlite3`,
-`shellcheck`, `shfmt`, `uv`, `ruff`, `delta`, `eza`, `zoxide`, `just`, `cloc`,
-`tokei`, `hyperfine`, `htop`, `tmux`, `vim`, `dig`, `nc`, `lsof`, `strace`,
-`rsync`, `wget`, `gpg`, `git-lfs`, `git-filter-repo`, `moreutils`, `parallel`,
-`entr`, `pv`, `bc`, `xxd`, `file`, `less`, and kitty/foot/alacritty/ghostty
-terminfo. It also installs the language servers OMP auto-detects for shell,
-Python, TypeScript/JS, Svelte, Vue, Astro, YAML/Ansible, PHP, Docker, GraphQL,
-Prisma, Vim, Emmet, Go, Rust, and C/C++.
+`shellcheck`, `shfmt`, `uv`, `ruff`, `sqlfluff`, `delta`, `just`, `tokei`,
+`tmux`, `vim`, `dig`, `nc`, `lsof`, `strace`, `rsync`, `wget`, `gpg`,
+`git-lfs`, `git-filter-repo`, `moreutils`, `parallel`, `entr`, `pv`, `bc`,
+`xxd`, `file`, `less`, and kitty/foot/alacritty/ghostty terminfo. It also
+installs the language servers OMP auto-detects for Go, Rust,
+TypeScript/JavaScript/Node, Python, shell, YAML, JSON, TOML, Svelte, Tailwind
+CSS, HTML/CSS, Vue, Astro, Emmet, Markdown, Ansible, GraphQL, Prisma,
+PHP/WordPress, Ruby, Dockerfile, Vimscript, C/C++, and SQL.
 
 ## Machine-specific configs
 

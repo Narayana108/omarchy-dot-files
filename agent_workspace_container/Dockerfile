@@ -10,6 +10,14 @@ ARG GH_SHA256=98cb101ad87dbbd3f6b2f2bfcbd43197ccd07643140121d8a9cfaa91eadbc24e
 ARG OMP_VERSION=18.20.3
 ARG OPENCODE_VERSION=1.19.5
 ARG QODER_VERSION=1.1.90
+ARG WP_CLI_VERSION=2.12.0
+ARG WP_CLI_SHA256=ce34ddd838f7351d6759068d09793f26755463b4a4610a5a5c0a97b68220d85c
+ARG PHPSTAN_VERSION=2.3.6
+ARG PHPSTAN_SHA256=bd5af896c8eb831e10873a4407c37ac33118dcd88de4ea77e13cd6e6702a41cc
+ARG PHP_CS_FIXER_VERSION=3.95.31
+ARG PHP_CS_FIXER_SHA256=4c4fb157a6adf633ef130abda3bf208c81918af941404bc169d16081fdfaea8d
+ARG SQLS_VERSION=0.2.48
+ARG SQLS_SHA256=30047b92c41658c821b7803d2c2a3a1ce4e17ee769ceff6f24bb9e3daaf5d4dc
 
 ENV DEBIAN_FRONTEND=noninteractive
 
@@ -59,19 +67,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     netcat-openbsd \
     lsof \
     strace \
-    htop \
     tmux \
     vim \
     zip \
     zstd \
     bzip2 \
-    cloc \
-    hyperfine \
     tokei \
     git-filter-repo \
     git-delta \
-    eza \
-    zoxide \
     just \
     yq \
     shellcheck \
@@ -80,9 +83,24 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     clang-format \
     gopls \
     rust-analyzer \
+    cargo \
+    rustc \
     rubocop \
     yamllint \
     ansible-lint \
+    php-cli \
+    php-mbstring \
+    php-xml \
+    php-curl \
+    php-zip \
+    php-gd \
+    php-intl \
+    php-sqlite3 \
+    php-mysql \
+    php-pgsql \
+    php-tokenizer \
+    composer \
+    phpunit \
     && rm -rf /var/lib/apt/lists/*
 
 # Debian ships fd and bat under conflict-avoiding names.
@@ -91,7 +109,7 @@ RUN ln -sf /usr/bin/fdfind /usr/local/bin/fd \
 
 # Python tooling the agent reaches for constantly.
 RUN python3 -m pip install --no-cache-dir --break-system-packages \
-    uv ruff "python-lsp-server[all]"
+    uv ruff sqlfluff "python-lsp-server[all]"
 
 # Install Node.js and npm from official binaries
 RUN set -eux; \
@@ -123,6 +141,37 @@ RUN set -eux; \
     tar -xzf "${GH_ARCHIVE}" -C /usr/local --strip-components=1 --no-same-owner; \
     rm -f "${GH_ARCHIVE}"; \
     gh --version
+
+# WordPress CLI, PHPStan, and PHP-CS-Fixer from pinned release phars.
+RUN set -eux; \
+    cd /tmp; \
+    curl -fsSLo wp-cli.phar \
+        "https://github.com/wp-cli/wp-cli/releases/download/v${WP_CLI_VERSION}/wp-cli-${WP_CLI_VERSION}.phar"; \
+    echo "${WP_CLI_SHA256}  wp-cli.phar" | sha256sum -c -; \
+    install -m 0755 wp-cli.phar /usr/local/bin/wp; \
+    curl -fsSLo phpstan.phar \
+        "https://github.com/phpstan/phpstan/releases/download/${PHPSTAN_VERSION}/phpstan.phar"; \
+    echo "${PHPSTAN_SHA256}  phpstan.phar" | sha256sum -c -; \
+    install -m 0755 phpstan.phar /usr/local/bin/phpstan; \
+    curl -fsSLo php-cs-fixer.phar \
+        "https://github.com/PHP-CS-Fixer/PHP-CS-Fixer/releases/download/v${PHP_CS_FIXER_VERSION}/php-cs-fixer.phar"; \
+    echo "${PHP_CS_FIXER_SHA256}  php-cs-fixer.phar" | sha256sum -c -; \
+    install -m 0755 php-cs-fixer.phar /usr/local/bin/php-cs-fixer; \
+    rm -f wp-cli.phar phpstan.phar php-cs-fixer.phar; \
+    wp --version --allow-root; \
+    phpstan --version; \
+    php-cs-fixer --version
+
+# SQL language server (not in OMP's built-in defaults).
+RUN set -eux; \
+    cd /tmp; \
+    curl -fsSLo sqls.zip \
+        "https://github.com/sqls-server/sqls/releases/download/v${SQLS_VERSION}/sqls-linux-${SQLS_VERSION}.zip"; \
+    echo "${SQLS_SHA256}  sqls.zip" | sha256sum -c -; \
+    unzip -q sqls.zip -d /usr/local/bin; \
+    chmod 0755 /usr/local/bin/sqls; \
+    rm -f sqls.zip; \
+    sqls -version
 
 # Create unprivileged development user
 RUN groupadd --gid 1000 dev \
@@ -214,7 +263,33 @@ RUN npm install -g \
     "@ansible/ansible-language-server" \
     markdownlint-cli2 \
     pyright \
-    basedpyright
+    basedpyright \
+    "@taplo/cli"
+
+# PHP_CodeSniffer is not packaged in Debian 13.
+RUN composer global require --no-interaction --no-progress squizlabs/php_codesniffer \
+    && mkdir -p "$HOME/.local/bin" \
+    && PHPCS_BIN="$(composer global config bin-dir --absolute)" \
+    && ln -sf "$PHPCS_BIN/phpcs" "$HOME/.local/bin/phpcs" \
+    && ln -sf "$PHPCS_BIN/phpcbf" "$HOME/.local/bin/phpcbf" \
+    && phpcs --version
+
+# TOML and SQL servers are not in OMP's built-in defaults; register them.
+RUN printf '%s\n' \
+    '{' \
+    '  "taplo": {' \
+    '    "command": "taplo",' \
+    '    "args": ["lsp", "stdio"],' \
+    '    "fileTypes": [".toml"],' \
+    '    "rootMarkers": [".git", "Cargo.toml", "pyproject.toml"]' \
+    '  },' \
+    '  "sqls": {' \
+    '    "command": "sqls",' \
+    '    "args": ["-stdio"],' \
+    '    "fileTypes": [".sql"],' \
+    '    "rootMarkers": [".git", ".sqls.yml"]' \
+    '  }' \
+    '}' > /home/dev/lsp.json
 
 WORKDIR /workspace
 
