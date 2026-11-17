@@ -152,6 +152,33 @@ CONTAINER_NAME="$CONTAINER_PREFIX-$WORKSPACE_NAME"
 # stay container-local: the host's session store is never read or written.
 CONTAINER_WORKSPACE_DIR="/workspace/$WORKSPACE_NAME"
 
+# Git executes hooks and reads config from the workspace. Mount the hook
+# directory and config read-only so a compromised agent cannot plant a hook or
+# rewrite core.hooksPath/sshCommand that runs on the host at the next git
+# command. The rest of .git stays writable so in-container commits work.
+GIT_READONLY_MOUNTS=()
+
+if command -v git >/dev/null 2>&1; then
+    WORKSPACE_GIT_DIR="$(git -C "$PROJECT_DIR" rev-parse --absolute-git-dir 2>/dev/null || true)"
+
+    if [[ -n "$WORKSPACE_GIT_DIR" && "$WORKSPACE_GIT_DIR" == "$PROJECT_DIR"/* ]]; then
+        WORKSPACE_HOOKS_DIR="$(git -C "$PROJECT_DIR" rev-parse --git-path hooks 2>/dev/null || true)"
+        [[ "$WORKSPACE_HOOKS_DIR" == /* ]] || WORKSPACE_HOOKS_DIR="$PROJECT_DIR/$WORKSPACE_HOOKS_DIR"
+
+        if [[ -d "$WORKSPACE_HOOKS_DIR" && "$WORKSPACE_HOOKS_DIR" == "$PROJECT_DIR"/* ]]; then
+            GIT_READONLY_MOUNTS+=(
+                --mount "type=bind,src=$WORKSPACE_HOOKS_DIR,dst=$CONTAINER_WORKSPACE_DIR/${WORKSPACE_HOOKS_DIR#"$PROJECT_DIR"/},ro"
+            )
+        fi
+
+        if [[ -f "$WORKSPACE_GIT_DIR/config" ]]; then
+            GIT_READONLY_MOUNTS+=(
+                --mount "type=bind,src=$WORKSPACE_GIT_DIR/config,dst=$CONTAINER_WORKSPACE_DIR/${WORKSPACE_GIT_DIR#"$PROJECT_DIR"/}/config,ro"
+            )
+        fi
+    fi
+fi
+
 # ============================================================
 # Agent harness selection
 # ============================================================
@@ -251,6 +278,24 @@ for OMP_CODE_FILE in config.yml models.yml; do
         --mount "type=bind,src=$OMP_CONFIG_DIR/$OMP_CODE_FILE,dst=/home/dev/.omp/agent/$OMP_CODE_FILE,ro"
     )
 done
+
+# Qoder's dispatcher, bundled runtime, plugin hooks, external-command registry,
+# marketplace list, shell snapshots, and settings are all host-owned code or
+# policy. Keep them read-only; only projects, logs, cache, and state stay rw.
+QODER_READONLY_MOUNTS=()
+
+for QODER_CODE_DIR in entry .bin security-resources external-commands plugins shell-snapshots; do
+    [[ -d "$QODER_CONFIG_DIR/$QODER_CODE_DIR" ]] || continue
+    QODER_READONLY_MOUNTS+=(
+        --mount "type=bind,src=$QODER_CONFIG_DIR/$QODER_CODE_DIR,dst=/home/dev/.qoder/$QODER_CODE_DIR,ro"
+    )
+done
+
+if [[ -f "$QODER_CONFIG_DIR/settings.json" ]]; then
+    QODER_READONLY_MOUNTS+=(
+        --mount "type=bind,src=$QODER_CONFIG_DIR/settings.json,dst=/home/dev/.qoder/settings.json,ro"
+    )
+fi
 
 # ============================================================
 # Existing container check
@@ -389,6 +434,8 @@ PODMAN_ARGS=(
 
     --mount "type=bind,src=$PROJECT_DIR,dst=$CONTAINER_WORKSPACE_DIR,rw"
 
+    "${GIT_READONLY_MOUNTS[@]}"
+
     --mount "type=bind,src=$OMP_CONFIG_DIR,dst=/home/dev/.omp/agent,rw"
 
     --mount "type=bind,src=$OPENCODE_CONFIG_DIR,dst=/home/dev/.config/opencode,ro"
@@ -396,6 +443,7 @@ PODMAN_ARGS=(
     --mount "type=bind,src=$QODER_CONFIG_DIR,dst=/home/dev/.qoder,rw"
 
     "${OMP_READONLY_MOUNTS[@]}"
+    "${QODER_READONLY_MOUNTS[@]}"
 
     --workdir="$CONTAINER_WORKSPACE_DIR"
 

@@ -77,6 +77,8 @@ throwaway home keeps `/home/dev/.qoder` a pure mount target and leaves
 | Host | Container | Mode |
 |---|---|---|
 | selected workspace directory | `/workspace/<workspace-name>` (also the working directory) | rw |
+| `<workspace>/.git/hooks` | `<workspace>/.git/hooks` | ro |
+| `<workspace>/.git/config` | `<workspace>/.git/config` | ro |
 | `$(omp config path)` | `/home/dev/.omp/agent` | rw |
 | `$(omp config path)/extensions` | `/home/dev/.omp/agent/extensions` | ro |
 | `$(omp config path)/managed-skills` | `/home/dev/.omp/agent/managed-skills` | ro |
@@ -87,10 +89,13 @@ throwaway home keeps `/home/dev/.qoder` a pure mount target and leaves
 | `~/.config/opencode` | `/home/dev/.config/opencode` | ro |
 | `~/.local/share/opencode` | `/home/dev/.local/share/opencode` | rw |
 | `~/.qoder` | `/home/dev/.qoder` | rw |
+| `~/.qoder/entry`, `.bin`, `security-resources`, `external-commands`, `plugins`, `shell-snapshots` | same paths under `/home/dev/.qoder` | ro |
+| `~/.qoder/settings.json` | `/home/dev/.qoder/settings.json` | ro |
 
 The read-only entries shadow the writable config mounts: the harness can read
-its extensions, skills, agents, and OpenCode config, but cannot replace them
-with code the host would execute.
+its extensions, skills, agents, OpenCode config, Qoder dispatcher/runtime/plugin
+hooks, and git hooks/config, but cannot replace them with code the host would
+execute.
 
 `GH_TOKEN` is passed through from the host environment (see
 [GitHub authentication](#github-authentication)) so `gh` and HTTPS `git push`
@@ -178,22 +183,26 @@ on the host at its next start:
 | `~/.omp/agent/agents` | agent definitions shape host behaviour |
 | `~/.config/opencode` | OpenCode loads `plugins/`, `tui.jsonc`, and `opencode.json` from here |
 
-Creating an extension, skill, agent, or OpenCode plugin from inside the
-container therefore fails; do that on the host.
+Creating an extension, skill, agent, OpenCode plugin, Qoder plugin, or git hook
+from inside the container therefore fails; do that on the host.
 
 Residual risks to keep in mind:
 
 - The harness data directories are shared read-write so sessions and auth work.
-  They contain provider credentials (`agent.db`, `auth.json`); treat the
-  container as the same trust domain as your host user for those.
+  They contain provider credentials (`agent.db`, `auth.json`, `~/.qoder/.auth`);
+  treat the container as the same trust domain as your host user for those.
 - `~/.omp/agent/agent.db`, `history.db`, `usage.db`, `sessions`, `blobs`, and
   `terminal-sessions` remain writable. A compromised agent can read the stored
   provider credentials and rewrite conversation history. The read-only
   overlays above stop it from planting *new* code, not from reading or
   corrupting existing state.
-- The workspace is read-write, including `.git`. A compromised agent can change
-  hooks, `core.hooksPath`, or history; review before running host-side git
-  commands.
+- The workspace is read-write. `.git/hooks` and `.git/config` are read-only,
+  but `.git/index`, objects, refs, and logs are not, so a compromised agent can
+  still rewrite history or the index. Review `git log`/`git diff` before
+  running host-side git commands.
+- `.gitattributes`, `.gitmodules`, `.envrc`, `Makefile`, `package.json` scripts,
+  and editor task files live in the workspace and are writable. They only run
+  when you invoke them on the host; review changes before you do.
 - Network egress is unrestricted by design: the harness needs to browse the
   web. A compromised agent can therefore exfiltrate anything it can read. The
   read-only mounts reduce what it can *plant*, not what it can *send*.
