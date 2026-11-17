@@ -75,15 +75,25 @@ RUN groupadd --gid 1000 dev \
 RUN install -d -o dev -g dev -m 0700 \
     /home/dev/.omp \
     /home/dev/.omp/agent \
+    /home/dev/.omp/plugins \
     /home/dev/.omp/run \
     /home/dev/.config \
     /home/dev/.config/opencode \
     /home/dev/.local \
     /home/dev/.local/share \
     /home/dev/.local/share/opencode \
+    /home/dev/.local/state \
+    /home/dev/.local/state/opencode \
+    /home/dev/.claude \
+    /home/dev/.claude/skills \
+    /home/dev/.agents \
+    /home/dev/.agents/skills \
     /home/dev/.npm-global \
     /home/dev/.npm-global/bin \
     /home/dev/.qoder
+
+RUN install -d -o dev -g dev -m 0755 \
+    /usr/share/omarchy/default/agents/skills
 
 # Development environment
 ENV HOME=/home/dev

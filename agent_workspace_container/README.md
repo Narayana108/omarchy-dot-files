@@ -46,16 +46,21 @@ expect harness behaviour to change under you without a Dockerfile edit.
 Everything runs as an unprivileged user, `dev`, uid/gid `1000`, home
 `/home/dev`, shell `bash`. The uid/gid pair is not arbitrary: `dev-container`
 starts the container with `--userns="keep-id:uid=1000,gid=1000"`, so files the
-agent creates in `/workspace/<workspace-name>` are owned by your host uid.
+agent creates in the workspace are owned by your host uid.
 
 Pre-created as `dev`-owned `0700` directories, so bind mounts land on real
 directories rather than being created as root:
 
 ```
 /home/dev/.omp/agent          /home/dev/.config/opencode
-/home/dev/.omp/run            /home/dev/.local/share/opencode
+/home/dev/.omp/plugins        /home/dev/.local/share/opencode
+/home/dev/.omp/run            /home/dev/.local/state/opencode
 /home/dev/.npm-global/bin     /home/dev/.qoder
+/home/dev/.claude/skills      /home/dev/.agents/skills
 ```
+
+`/usr/share/omarchy/default/agents/skills` is also pre-created (`0755`) as the
+target of the `~/.agents/skills` symlinks.
 
 `PATH` puts `~/.bun/bin`, `~/.npm-global/bin`, `~/.opencode/bin`, `~/go/bin`,
 and `/usr/local/go/bin` ahead of the system directories.
@@ -67,8 +72,8 @@ throwaway home keeps `/home/dev/.qoder` a pure mount target and leaves
 `/home/dev/.profile` untouched.
 
 `WORKDIR` is `/workspace` (the default for a plain `podman run`); `CMD` is
-`bash`. `dev-container` always overrides the working directory with
-`--workdir=/workspace/<workspace-name>`.
+`bash`. `dev-container` mounts the workspace at its host path and overrides the
+working directory with `--workdir=<host path>`.
 
 ## How `dev-container` uses it
 

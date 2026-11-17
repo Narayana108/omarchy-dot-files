@@ -36,8 +36,8 @@ Edit the files in this repo — they are live through the symlinks — then run 
 lists the immediate subdirectories of `/data/llms/agent_workspaces` plus the
 directory you invoked it from (labelled `(current directory)`), asks which
 harness to run, allocates three free ports, and starts the container with the
-chosen directory bind-mounted at `/workspace/<workspace-name>`, which is also
-the container's working directory.
+chosen directory bind-mounted at its host path, which is also the container's
+working directory.
 
 ```bash
 dev-container            # pick workspace, then harness
