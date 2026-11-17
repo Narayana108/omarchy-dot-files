@@ -58,6 +58,35 @@ prompt_choice() {
     done
 }
 
+# Encode a directory the way omp names its session bucket:
+#   -<relative>      under $HOME
+#   -tmp-<relative>  under the temp root
+#   --<absolute>--   anywhere else
+# with path separators replaced by '-'. Mirrors omp's session-paths.ts.
+omp_session_bucket() {
+    local cwd="$1"
+    local home="${HOME%/}"
+    local tmp="${TMPDIR:-/tmp}"
+    local rel
+
+    tmp="${tmp%/}"
+
+    if [[ "$cwd" == "$tmp" ]]; then
+        printf '%s\n' '-tmp'
+    elif [[ "$cwd" == "$tmp/"* ]]; then
+        rel="${cwd#"$tmp"/}"
+        printf '%s\n' "-tmp-${rel//\//-}"
+    elif [[ "$cwd" == "$home" ]]; then
+        printf '%s\n' '-'
+    elif [[ "$cwd" == "$home/"* ]]; then
+        rel="${cwd#"$home"/}"
+        printf '%s\n' "-${rel//\//-}"
+    else
+        rel="${cwd#/}"
+        printf '%s\n' "--${rel//\//-}--"
+    fi
+}
+
 # ============================================================
 # Requirements
 # ============================================================
@@ -150,10 +179,15 @@ CONTAINER_NAME="$CONTAINER_PREFIX-$WORKSPACE_NAME"
 [[ "$WORKSPACE_NAME" =~ ^[a-zA-Z0-9][a-zA-Z0-9_.-]*$ ]] || \
     fail "Invalid workspace name: $WORKSPACE_NAME"
 
-# Workspace is bind-mounted below /workspace so the container's working
-# directory is the selected workspace itself, not the mount root. Sessions
-# stay container-local: the host's session store is never read or written.
-CONTAINER_WORKSPACE_DIR="/workspace/$WORKSPACE_NAME"
+# Resolve symlinks once. The harnesses key their session stores on the
+# canonical path, and the container must see the same path as the host.
+PROJECT_DIR="$(cd "$PROJECT_DIR" && pwd -P)" || \
+    fail "Cannot resolve the workspace directory: $PROJECT_DIR"
+
+# Mount the workspace at its host path so path-keyed state (omp session
+# buckets, opencode project ids, qoder project dirs) resolves identically
+# inside and outside the container.
+CONTAINER_WORKSPACE_DIR="$PROJECT_DIR"
 
 # Git executes hooks and reads config from the workspace. Mount the hook
 # directory and config read-only so a compromised agent cannot plant a hook or
@@ -233,6 +267,12 @@ OMP_CONFIG_DIR="$(omp config path)" || \
 [[ -d "$OMP_CONFIG_DIR" ]] || \
     fail "OMP configuration not found: $OMP_CONFIG_DIR"
 
+# The container's cwd is the host path, so omp's cwd-derived bucket is the same
+# on both sides. Point the container at it explicitly: the container's $HOME
+# differs, and omp would otherwise encode an absolute bucket.
+OMP_SESSION_BUCKET="$(omp_session_bucket "$PROJECT_DIR")"
+OMP_SESSION_DIR="/home/dev/.omp/agent/sessions/$OMP_SESSION_BUCKET"
+
 # ============================================================
 # GitHub CLI authentication
 # ============================================================
@@ -286,7 +326,7 @@ truncate_text() {
 
 # One line per session: id|title|bytes|mtime|messages|model
 omp_sessions() {
-    local bucket="$OMP_CONFIG_DIR/sessions/--workspace-$WORKSPACE_NAME--"
+    local bucket="$OMP_CONFIG_DIR/sessions/$OMP_SESSION_BUCKET"
     local file id title size mtime msgs model
 
     [[ -d "$bucket" ]] || return 0
@@ -325,7 +365,7 @@ opencode_sessions() {
                (select count(*) from message m where m.session_id = s.id),
                coalesce(case when json_valid(s.model) then json_extract(s.model, '$.id') else s.model end, '')
         from session s
-        where s.directory = '$CONTAINER_WORKSPACE_DIR'
+        where s.directory = '$PROJECT_DIR'
         order by s.time_updated desc;
     "
 
@@ -337,8 +377,10 @@ opencode_sessions() {
 }
 
 qoder_sessions() {
-    local project="$QODER_CONFIG_DIR/projects/-workspace-$WORKSPACE_NAME"
+    local project="$QODER_CONFIG_DIR/projects/-${PROJECT_DIR#/}"
     local file id title size mtime msgs model
+
+    project="${project//\//-}"
 
     [[ -d "$project" ]] || return 0
 
@@ -698,6 +740,7 @@ PODMAN_ARGS=(
     --workdir="$CONTAINER_WORKSPACE_DIR"
 
     --env PI_CODING_AGENT_DIR=/home/dev/.omp/agent
+    --env "PI_CODING_AGENT_SESSION_DIR=$OMP_SESSION_DIR"
     --env QODER_CONFIG_DIR=/home/dev/.qoder
     --env COLORTERM
 

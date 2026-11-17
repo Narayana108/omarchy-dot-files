@@ -3,9 +3,9 @@
 Isolated container environments for agent harnesses to work in.
 
 `bin/dev-container` launches this image so an agent harness (OMP, OpenCode, or
-Qoder) gets its own sandbox with a workspace bind-mounted at
-`/workspace/<workspace-name>`, its own home directory, and its own copy of the
-harness configuration — instead of running against your real dot-files.
+Qoder) gets its own sandbox with the workspace bind-mounted at its host path,
+its own home directory, and its own copy of the harness configuration — instead
+of running against your real dot-files.
 
 ## Build
 
@@ -76,7 +76,7 @@ throwaway home keeps `/home/dev/.qoder` a pure mount target and leaves
 
 | Host | Container | Mode |
 |---|---|---|
-| selected workspace directory | `/workspace/<workspace-name>` (also the working directory) | rw |
+| selected workspace directory | same absolute path as on the host (also the working directory) | rw |
 | `<workspace>/.git/hooks` | `<workspace>/.git/hooks` | ro |
 | `<workspace>/.git/config` | `<workspace>/.git/config` | ro |
 | `$(omp config path)` | `/home/dev/.omp/agent` | rw |
@@ -185,15 +185,14 @@ line) to start a new one, or `q` to quit.
 | OpenCode | `--session <id>` |
 | Qoder | `--resume <id>` |
 
-Sessions are keyed by the container working directory
-(`/workspace/<workspace-name>`), so a session started in one workspace is not
-offered in another.
+Sessions are keyed by the canonical workspace path, which is the same inside
+and outside the container, so a session started on the host is offered in the
+container and vice versa. `PI_CODING_AGENT_SESSION_DIR` points OMP at the
+host bucket explicitly; OpenCode and Qoder resolve it from the cwd.
 
-Sessions are **container-local**. The harness config directories are shared
-with the host, but the working directory is not, so a host session and a
-container session for the same repository live in different buckets and cannot
-resume each other. That is deliberate: it keeps the container from reading or
-rewriting the host's conversation history.
+Because the session store is shared read-write, the container can read and
+rewrite the host's conversation history. That is the tradeoff for resuming host
+sessions; the read-only overlays above still stop it from planting new code.
 
 ## Security
 
