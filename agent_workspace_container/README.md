@@ -56,6 +56,25 @@ an agent reaches for:
 Debian ships `fd` as `fdfind` and `bat` as `batcat`; the image adds `fd` and
 `bat` symlinks in `/usr/local/bin`.
 
+OMP's LSP tool auto-detects servers on `PATH`. The image installs the ones for
+the stacks here:
+
+| Kind | Tools |
+|---|---|
+| Shell | `bash-language-server`, `shellcheck`, `shfmt` |
+| Python | `pyright-langserver`, `basedpyright-langserver`, `pylsp`, `ruff`, `uv` |
+| TypeScript/JS | `typescript-language-server`, `tsc`, `biome`, `eslint`, `prettier` |
+| Web | `vscode-html-language-server`, `vscode-css-language-server`, `vscode-json-language-server`, `vscode-eslint-language-server`, `tailwindcss-language-server`, `svelteserver`, `vue-language-server`, `astro-ls`, `emmet-language-server` |
+| Data/config | `yaml-language-server`, `yamllint`, `ansible-language-server`, `ansible-lint`, `graphql-lsp`, `prisma-language-server` |
+| Other | `intelephense` (PHP), `docker-langserver`, `vim-language-server`, `gopls`, `rust-analyzer`, `clangd`, `clang-format`, `rubocop`, `markdownlint-cli2` |
+
+Not installed: `marksman`, `lua-language-server`, `terraform-ls`, `helm-ls`,
+`nixd`, `nil`, `zls`, `texlab`, `phpactor`, `jdtls`, `kotlin-lsp`, `metals`,
+`haskell-language-server-wrapper`, `ocamllsp`, `elixir-ls`, `expert`,
+`erlang_ls`, `gleam`, `dart`, `sourcekit-lsp`, `swiftlint`, `tlapm_lsp`, `ols`,
+`omnisharp`, `hadolint`, `tflint`. Add them on demand; most pull a language
+toolchain.
+
 The toolchains and harnesses are pinned through `ARG`s so a rebuild is
 reproducible; apt packages follow the Debian 13 release. Bump the versions
 deliberately — harness behaviour changes with them.

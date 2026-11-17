@@ -76,6 +76,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     yq \
     shellcheck \
     shfmt \
+    clangd \
+    clang-format \
+    gopls \
+    rust-analyzer \
+    rubocop \
+    yamllint \
+    ansible-lint \
     && rm -rf /var/lib/apt/lists/*
 
 # Debian ships fd and bat under conflict-avoiding names.
@@ -83,7 +90,8 @@ RUN ln -sf /usr/bin/fdfind /usr/local/bin/fd \
     && ln -sf /usr/bin/batcat /usr/local/bin/bat
 
 # Python tooling the agent reaches for constantly.
-RUN python3 -m pip install --no-cache-dir --break-system-packages uv ruff
+RUN python3 -m pip install --no-cache-dir --break-system-packages \
+    uv ruff "python-lsp-server[all]"
 
 # Install Node.js and npm from official binaries
 RUN set -eux; \
@@ -179,6 +187,34 @@ RUN mkdir -p /tmp/qoder-check \
        npm install -g "@qoder-ai/qodercli@${QODER_VERSION}" \
     && HOME=/tmp/qoder-check QODER_CONFIG_DIR=/tmp/qoder-check qoder --version \
     && rm -rf /tmp/qoder-check
+
+# Language servers and linters OMP auto-detects (see its lsp/defaults.json).
+# The heavy language toolchains (Java, Kotlin, Scala, Haskell, OCaml, Elixir,
+# Erlang, Gleam, Dart, Swift, C#, TLA+, Zig, Odin) are intentionally absent;
+# install them on demand if a workspace needs one.
+RUN npm install -g \
+    bash-language-server \
+    typescript \
+    typescript-language-server \
+    vscode-langservers-extracted \
+    yaml-language-server \
+    "@tailwindcss/language-server" \
+    svelte-language-server \
+    "@vue/language-server" \
+    "@astrojs/language-server" \
+    "@biomejs/biome" \
+    prettier \
+    eslint \
+    intelephense \
+    dockerfile-language-server-nodejs \
+    graphql-language-service-cli \
+    "@prisma/language-server" \
+    vim-language-server \
+    "@olrtg/emmet-language-server" \
+    "@ansible/ansible-language-server" \
+    markdownlint-cli2 \
+    pyright \
+    basedpyright
 
 WORKDIR /workspace
 

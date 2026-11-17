@@ -70,7 +70,9 @@ the usual CLI tooling — `rg`, `fd`, `bat`, `fzf`, `jq`, `yq`, `sqlite3`,
 `tokei`, `hyperfine`, `htop`, `tmux`, `vim`, `dig`, `nc`, `lsof`, `strace`,
 `rsync`, `wget`, `gpg`, `git-lfs`, `git-filter-repo`, `moreutils`, `parallel`,
 `entr`, `pv`, `bc`, `xxd`, `file`, `less`, and kitty/foot/alacritty/ghostty
-terminfo.
+terminfo. It also installs the language servers OMP auto-detects for shell,
+Python, TypeScript/JS, Svelte, Vue, Astro, YAML/Ansible, PHP, Docker, GraphQL,
+Prisma, Vim, Emmet, Go, Rust, and C/C++.
 
 ## Machine-specific configs
 
