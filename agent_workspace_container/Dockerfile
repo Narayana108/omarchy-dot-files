@@ -7,6 +7,9 @@ ARG GO_SHA256=7226736c2339719cda28fbf3a54d71aa63bcefe376e98cef00034268dab24840
 ARG BUN_VERSION=1.4.4
 ARG GH_VERSION=2.104.0
 ARG GH_SHA256=98cb101ad87dbbd3f6b2f2bfcbd43197ccd07643140121d8a9cfaa91eadbc24e
+ARG OMP_VERSION=18.20.3
+ARG OPENCODE_VERSION=1.19.5
+ARG QODER_VERSION=1.1.90
 
 ENV DEBIAN_FRONTEND=noninteractive
 
@@ -30,7 +33,57 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     xz-utils \
     libatomic1 \
     passwd \
+    ncurses-term \
+    kitty-terminfo \
+    foot-terminfo \
+    less \
+    file \
+    xxd \
+    tree \
+    fd-find \
+    bat \
+    fzf \
+    sqlite3 \
+    bc \
+    time \
+    moreutils \
+    parallel \
+    entr \
+    inotify-tools \
+    pv \
+    rsync \
+    wget \
+    gnupg \
+    git-lfs \
+    dnsutils \
+    netcat-openbsd \
+    lsof \
+    strace \
+    htop \
+    tmux \
+    vim \
+    zip \
+    zstd \
+    bzip2 \
+    cloc \
+    hyperfine \
+    tokei \
+    git-filter-repo \
+    git-delta \
+    eza \
+    zoxide \
+    just \
+    yq \
+    shellcheck \
+    shfmt \
     && rm -rf /var/lib/apt/lists/*
+
+# Debian ships fd and bat under conflict-avoiding names.
+RUN ln -sf /usr/bin/fdfind /usr/local/bin/fd \
+    && ln -sf /usr/bin/batcat /usr/local/bin/bat
+
+# Python tooling the agent reaches for constantly.
+RUN python3 -m pip install --no-cache-dir --break-system-packages uv ruff
 
 # Install Node.js and npm from official binaries
 RUN set -eux; \
@@ -102,7 +155,7 @@ ENV GOPATH=/home/dev/go
 ENV GOMODCACHE=/home/dev/go/pkg/mod
 ENV NPM_CONFIG_PREFIX=/home/dev/.npm-global
 
-ENV PATH="/home/dev/.bun/bin:/home/dev/.npm-global/bin:/home/dev/.opencode/bin:/home/dev/go/bin:/usr/local/go/bin:/usr/local/bin:/usr/bin:/bin"
+ENV PATH="/home/dev/.bun/bin:/home/dev/.npm-global/bin:/home/dev/.opencode/bin:/home/dev/.local/bin:/home/dev/.cargo/bin:/home/dev/go/bin:/usr/local/go/bin:/usr/local/bin:/usr/bin:/bin"
 
 # Run development tools as unprivileged user
 USER dev
@@ -112,10 +165,10 @@ RUN git config --global "credential.https://github.com.helper" "!gh auth git-cre
 
 # Install Bun and OMP
 RUN curl -fsSL https://bun.com/install | bash -s "bun-v${BUN_VERSION}" \
-    && bun install -g @oh-my-pi/pi-coding-agent
+    && bun install -g "@oh-my-pi/pi-coding-agent@${OMP_VERSION}"
 
-# Install OpenCode and Qoder at upstream latest (resolved at build time)
-RUN curl -fsSL https://opencode.ai/install | bash -s -- --no-modify-path \
+# Install OpenCode and Qoder at the pinned versions
+RUN curl -fsSL https://opencode.ai/install | bash -s -- --version "${OPENCODE_VERSION}" --no-modify-path \
     && opencode --version
 
 # The qoder npm dispatcher self-bootstraps into $HOME/.qoder and rewrites the
@@ -123,7 +176,7 @@ RUN curl -fsSL https://opencode.ai/install | bash -s -- --no-modify-path \
 # keeps /home/dev/.qoder a pure mount target and /home/dev/.profile untouched.
 RUN mkdir -p /tmp/qoder-check \
     && HOME=/tmp/qoder-check QODER_CONFIG_DIR=/tmp/qoder-check \
-       npm install -g "@qoder-ai/qodercli@latest" \
+       npm install -g "@qoder-ai/qodercli@${QODER_VERSION}" \
     && HOME=/tmp/qoder-check QODER_CONFIG_DIR=/tmp/qoder-check qoder --version \
     && rm -rf /tmp/qoder-check
 

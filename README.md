@@ -33,15 +33,23 @@ Edit the files in this repo — they are live through the symlinks — then run 
 ## Agent workspace container
 
 `dev-container` opens a Podman sandbox for an agent harness to work in. It
-lists the immediate subdirectories of `/data/llms/agent_workspaces` plus the
-directory you invoked it from (labelled `(current directory)`), asks which
-harness to run, allocates three free ports, and starts the container with the
-chosen directory bind-mounted at its host path, which is also the container's
-working directory.
+lists the immediate subdirectories of `/data/llms/agent_workspaces` (override
+with `DEV_CONTAINER_WORKSPACES_DIR`) plus the directory you invoked it from
+(labelled `(current directory)`), asks which harness to run, allocates three
+free ports, and starts the container with the chosen directory bind-mounted at
+its host path, which is also the container's working directory.
 
 ```bash
 dev-container            # pick workspace, then harness
+dev-container --new      # skip the session menu, start fresh
+dev-container --resume ID
+dev-container --list     # print resumable sessions and exit
+dev-container --clean    # remove stopped dev-container containers
+dev-container --build    # rebuild the image
 ```
+
+It refuses to mount `/`, `$HOME`, or an ancestor of `$HOME`, and forwards the
+host's git identity so `git commit` works inside the container.
 
 It then lists the sessions that harness can resume in that workspace — title,
 size, date, message count, id, and model — and resumes the one you pick (or
@@ -56,7 +64,13 @@ cd agent_workspace_container && podman build -t localhost/thoth:debian13 .
 ```
 
 See [agent_workspace_container/README.md](agent_workspace_container/README.md)
-for what goes into the image and how the mounts are laid out.
+for what goes into the image and how the mounts are laid out. The image carries
+the usual CLI tooling — `rg`, `fd`, `bat`, `fzf`, `jq`, `yq`, `sqlite3`,
+`shellcheck`, `shfmt`, `uv`, `ruff`, `delta`, `eza`, `zoxide`, `just`, `cloc`,
+`tokei`, `hyperfine`, `htop`, `tmux`, `vim`, `dig`, `nc`, `lsof`, `strace`,
+`rsync`, `wget`, `gpg`, `git-lfs`, `git-filter-repo`, `moreutils`, `parallel`,
+`entr`, `pv`, `bc`, `xxd`, `file`, `less`, and kitty/foot/alacritty/ghostty
+terminfo.
 
 ## Machine-specific configs
 

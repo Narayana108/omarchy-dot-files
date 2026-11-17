@@ -29,17 +29,36 @@ upstream publishes one:
 | Go | `1.27.4` (ARG) | `go.dev/dl`, verified against `GO_SHA256` |
 | GitHub CLI (`gh`) | `2.104.0` (ARG) | `github.com/cli/cli` release tarball, verified against `GH_SHA256` |
 | Bun | `1.4.4` (ARG) | `bun.com/install` |
-| OMP (`@oh-my-pi/pi-coding-agent`) | latest at build time | `bun install -g` |
-| OpenCode | latest at build time | `opencode.ai/install` |
-| Qoder CLI | latest at build time | `npm install -g @qoder-ai/qodercli@latest` |
+| OMP (`@oh-my-pi/pi-coding-agent`) | `18.20.3` (ARG) | `bun install -g` |
+| OpenCode | `1.19.5` (ARG) | `opencode.ai/install --version` |
+| Qoder CLI | `1.1.90` (ARG) | `npm install -g @qoder-ai/qodercli` |
 
 System packages: `bash`, `ca-certificates`, `curl`, `git`, `openssh-client`,
 `build-essential`, `pkg-config`, `python3` (+ `dev`, `venv`, `pip`), `jq`,
 `procps`, `ripgrep`, `unzip`, `xz-utils`, `libatomic1`, `passwd`.
 
-Node, Go, and Bun are pinned through `ARG`s so a rebuild is reproducible. The
-three harnesses float to latest — bump the pinned versions deliberately, but
-expect harness behaviour to change under you without a Dockerfile edit.
+## CLI tools
+
+Beyond the toolchains, the image carries the search, data, and inspection tools
+an agent reaches for:
+
+| Area | Tools |
+|---|---|
+| Search | `rg` (ripgrep), `fd`, `fzf`, `tree`, `cloc`, `tokei` |
+| Read | `bat`, `less`, `file`, `xxd`, `jq`, `yq`, `sqlite3` |
+| Edit/run | `vim`, `tmux`, `entr`, `inotifywait`, `parallel`, `moreutils` (`sponge`, `ts`, `vipe`, `ifne`), `pv`, `bc`, `time`, `hyperfine` |
+| Network | `curl`, `wget`, `rsync`, `dig`, `nc`, `lsof`, `strace`, `htop` |
+| Git | `gh`, `git-lfs`, `git-filter-repo`, `delta` |
+| Python | `uv`, `ruff` |
+| Shell | `shellcheck`, `shfmt` |
+| Terminal | `ncurses-term` (kitty/wezterm terminfo) |
+
+Debian ships `fd` as `fdfind` and `bat` as `batcat`; the image adds `fd` and
+`bat` symlinks in `/usr/local/bin`.
+
+The toolchains and harnesses are pinned through `ARG`s so a rebuild is
+reproducible; apt packages follow the Debian 13 release. Bump the versions
+deliberately — harness behaviour changes with them.
 
 ## The `dev` user
 
@@ -62,8 +81,9 @@ directories rather than being created as root:
 `/usr/share/omarchy/default/agents/skills` is also pre-created (`0755`) as the
 target of the `~/.agents/skills` symlinks.
 
-`PATH` puts `~/.bun/bin`, `~/.npm-global/bin`, `~/.opencode/bin`, `~/go/bin`,
-and `/usr/local/go/bin` ahead of the system directories.
+`PATH` puts `~/.bun/bin`, `~/.npm-global/bin`, `~/.opencode/bin`,
+`~/.local/bin`, `~/.cargo/bin`, `~/go/bin`, and `/usr/local/go/bin` ahead of the
+system directories.
 
 Qoder is installed and smoke-tested against a throwaway `HOME`
 (`/tmp/qoder-check`) and then deleted. Its npm dispatcher self-bootstraps into
@@ -102,6 +122,20 @@ working directory with `--workdir=<host path>`.
 | `~/.qoder/entry`, `.bin`, `security-resources`, `external-commands`, `plugins`, `shell-snapshots` | same paths under `/home/dev/.qoder` | ro |
 | `~/.qoder/settings.json` | `/home/dev/.qoder/settings.json` | ro |
 
+### Guardrails
+
+`dev-container` refuses to mount `/`, `$HOME`, an ancestor of `$HOME`, or a
+short list of credential directories (`~/.ssh`, `~/.gnupg`, `~/.aws`,
+`~/.config`, `~/.local`, `~/.password-store`, `~/.kube`, `~/.docker`). The
+"current directory" entry makes those easy to hit by accident.
+
+It forwards the host's git identity as `GIT_AUTHOR_*`/`GIT_COMMITTER_*`, so
+`git commit` works inside the container without baking a name or email into the
+image. It also passes `TZ` and `COLORTERM` through.
+
+`--pull=never` keeps `podman run` from reaching for a registry; the image check
+above is the only source.
+
 The read-only entries shadow the writable config mounts: the harness can read
 its extensions, skills, agents, OpenCode config, Qoder dispatcher/runtime/plugin
 hooks, and git hooks/config, but cannot replace them with code the host would
@@ -113,13 +147,17 @@ material:
 - `~/.config/opencode/agents/omp-<name>.md` — OMP agent bodies converted to
   OpenCode subagents. OMP's `model`/`tools`/`spawns` frontmatter is not
   OpenCode-compatible, so only `description`, `mode: subagent`, and the body are
-  kept.
+  kept. OMP's `tools` allowlist is mapped to OpenCode `permissions`: an agent
+  without `edit`/`write`/`patch` gets `edit: deny`, one without `bash` gets
+  `shell: deny`, and one without `web_search`/`web_fetch` gets
+  `websearch`/`webfetch: deny`.
 - `~/.config/opencode/skills/<name>` — relative symlinks to
   `~/.omp/agent/managed-skills/<name>`. OpenCode does not follow a symlinked
   source root, so each skill is linked individually.
 
-Both are inside the read-only `~/.config/opencode` mount, so the container sees
-them but cannot change them.
+Stale `omp-*.md` views and dangling skill links are removed before each
+regeneration. Both are inside the read-only `~/.config/opencode` mount, so the
+container sees them but cannot change them.
 
 `GH_TOKEN` is passed through from the host environment (see
 [GitHub authentication](#github-authentication)) so `gh` and HTTPS `git push`
@@ -182,7 +220,11 @@ Select session number (or q to quit):
 
 Each entry shows the title, size, modification time, message count, session id,
 and model. Enter a number to resume that session, the last number (or an empty
-line) to start a new one, or `q` to quit.
+line) to start a new one, or `q` to quit. Sessions started in a subdirectory of
+the workspace are included.
+
+`dev-container --list` prints the table and exits; `--new` and
+`--resume <id>` skip the menu for the corresponding action.
 
 | Harness | Resume flag |
 |---|---|
@@ -266,6 +308,23 @@ The image is not rebuilt automatically. After editing the Dockerfile:
 podman build -t localhost/thoth:debian13 .
 ```
 
-`dev-container` refuses to start if the image is missing, and refuses to start
-if a container of the same name already exists — remove a stale one with
-`podman rm -f thoth-<workspace>`.
+or `dev-container --build`, which runs the same command against the image
+directory next to the script.
+
+`dev-container` refuses to start if the image is missing. A stopped container of
+the same name is removed automatically; a running one is left alone and the
+script fails with its status. `dev-container --clean` removes stopped
+`dev-container.*` containers in one go.
+
+## Resource limits
+
+Unset by default so heavy builds are not capped. Opt in with environment
+variables:
+
+| Variable | Effect |
+|---|---|
+| `DEV_CONTAINER_MEMORY` | `--memory` (e.g. `8g`) |
+| `DEV_CONTAINER_CPUS` | `--cpus` (e.g. `4`) |
+| `DEV_CONTAINER_TMPFS` | `--tmpfs /tmp:rw,size=…` (e.g. `2g`) |
+
+`DEV_CONTAINER_WORKSPACES_DIR` overrides the scanned workspace root.

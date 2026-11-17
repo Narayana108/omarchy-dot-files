@@ -6,8 +6,12 @@ set -Eeuo pipefail
 # ============================================================
 
 IMAGE="localhost/thoth:debian13"
-WORKSPACES_DIR="/data/llms/agent_workspaces"
+WORKSPACES_DIR="${DEV_CONTAINER_WORKSPACES_DIR:-/data/llms/agent_workspaces}"
 CONTAINER_PREFIX="thoth"
+
+SCRIPT_PATH="$(readlink -f "${BASH_SOURCE[0]}")"
+SCRIPT_DIR="$(cd "$(dirname "$SCRIPT_PATH")" && pwd)"
+IMAGE_DIR="$SCRIPT_DIR/../agent_workspace_container"
 
 CONTAINER_UID=1000
 CONTAINER_GID=1000
@@ -23,6 +27,57 @@ fail() {
     printf 'Error: %s\n' "$*" >&2
     exit 1
 }
+
+usage() {
+    cat <<'EOF'
+Usage: dev-container [OPTION]
+
+  (no option)        interactive workspace, harness, and session menu
+  -n, --new          start a new session (skip the session menu)
+  -r, --resume ID    resume session ID (skip the session menu)
+  -l, --list         list resumable sessions and exit
+      --clean        remove stopped dev-container containers and exit
+      --build        rebuild the image and exit
+  -h, --help         show this help and exit
+EOF
+}
+
+MODE="menu"
+RESUME_ID=""
+
+while (( $# > 0 )); do
+    case "$1" in
+        -h|--help)
+            usage
+            exit 0
+            ;;
+        -n|--new)
+            MODE="new"
+            shift
+            ;;
+        -r|--resume)
+            [[ -n "${2:-}" ]] || fail "--resume requires a session id"
+            MODE="resume"
+            RESUME_ID="$2"
+            shift 2
+            ;;
+        -l|--list)
+            MODE="list"
+            shift
+            ;;
+        --clean)
+            MODE="clean"
+            shift
+            ;;
+        --build)
+            MODE="build"
+            shift
+            ;;
+        *)
+            fail "Unknown argument: $1 (try --help)"
+            ;;
+    esac
+done
 
 # Prompt for a 1-based index into a list of $2 items.
 # Prints the chosen index on stdout; prompts and diagnostics go to stderr.
@@ -92,10 +147,32 @@ omp_session_bucket() {
 # ============================================================
 
 command -v podman >/dev/null 2>&1 || fail "Podman is not installed."
+
+if [[ "$MODE" == "build" ]]; then
+    [[ -d "$IMAGE_DIR" ]] || fail "Image directory not found: $IMAGE_DIR"
+    podman build -t "$IMAGE" "$IMAGE_DIR"
+    exit 0
+fi
+
+if [[ "$MODE" == "clean" ]]; then
+    mapfile -t STALE_CONTAINERS < <(
+        podman ps -aq \
+            --filter "label=dev-container.workspace" \
+            --filter "status=exited" \
+            --filter "status=created"
+    )
+
+    if (( ${#STALE_CONTAINERS[@]} == 0 )); then
+        printf 'No stopped dev-container containers.\n'
+    else
+        podman rm -f "${STALE_CONTAINERS[@]}"
+    fi
+
+    exit 0
+fi
+
 command -v omp >/dev/null 2>&1 || fail "OMP is not installed."
 command -v ss >/dev/null 2>&1 || fail "Install iproute2 (ss is required)."
-
-(( $# == 0 )) || fail "Run dev-container without arguments to open the workspace menu."
 
 podman image exists "$IMAGE" || \
     fail "Container image not found: $IMAGE"
@@ -113,7 +190,7 @@ podman image exists "$IMAGE" || \
 mapfile -d '' -t WORKSPACES < <(
     find "$WORKSPACES_DIR" \
         -mindepth 1 -maxdepth 1 \
-        -type d ! -name '.*' \
+        -xtype d ! -name '.*' \
         -printf '%f\0' | sort -z
 )
 
@@ -183,6 +260,21 @@ CONTAINER_NAME="$CONTAINER_PREFIX-$WORKSPACE_NAME"
 # canonical path, and the container must see the same path as the host.
 PROJECT_DIR="$(cd "$PROJECT_DIR" && pwd -P)" || \
     fail "Cannot resolve the workspace directory: $PROJECT_DIR"
+
+# Refuse to hand the sandbox the host root, the home directory, or an ancestor
+# of home: those expose SSH keys, browser data, and every other repo. Also
+# refuse the obvious credential directories.
+case "$PROJECT_DIR" in
+    /|/etc|/usr|/var|/boot|/dev|/proc|/sys|/run|/root|/home|/tmp|/var/tmp|/data)
+        fail "Refusing to mount system directory: $PROJECT_DIR"
+        ;;
+    "$HOME"|"$HOME/.ssh"|"$HOME/.gnupg"|"$HOME/.aws"|"$HOME/.config"|"$HOME/.local"|"$HOME/.password-store"|"$HOME/.kube"|"$HOME/.docker")
+        fail "Refusing to mount sensitive directory: $PROJECT_DIR"
+        ;;
+esac
+
+[[ "$HOME" != "$PROJECT_DIR"/* ]] || \
+    fail "Refusing to mount an ancestor of \$HOME: $PROJECT_DIR"
 
 # Mount the workspace at its host path so path-keyed state (omp session
 # buckets, opencode project ids, qoder project dirs) resolves identically
@@ -292,6 +384,33 @@ else
 fi
 
 # ============================================================
+# Git identity
+# ============================================================
+
+# Commits made inside the container use the host's identity. Git reads these
+# from the environment, so nothing is baked into the image.
+GIT_IDENTITY_ARGS=()
+
+if command -v git >/dev/null 2>&1; then
+    GIT_USER_NAME="$(git -C "$PROJECT_DIR" config --get user.name 2>/dev/null || true)"
+    GIT_USER_EMAIL="$(git -C "$PROJECT_DIR" config --get user.email 2>/dev/null || true)"
+
+    if [[ -n "$GIT_USER_NAME" && -n "$GIT_USER_EMAIL" ]]; then
+        export GIT_AUTHOR_NAME="$GIT_USER_NAME"
+        export GIT_AUTHOR_EMAIL="$GIT_USER_EMAIL"
+        export GIT_COMMITTER_NAME="$GIT_USER_NAME"
+        export GIT_COMMITTER_EMAIL="$GIT_USER_EMAIL"
+
+        GIT_IDENTITY_ARGS+=(
+            --env GIT_AUTHOR_NAME
+            --env GIT_AUTHOR_EMAIL
+            --env GIT_COMMITTER_NAME
+            --env GIT_COMMITTER_EMAIL
+        )
+    fi
+fi
+
+# ============================================================
 # Session resume
 # ============================================================
 
@@ -326,13 +445,13 @@ truncate_text() {
 
 # One line per session: id|title|bytes|mtime|messages|model
 omp_sessions() {
-    local bucket="$OMP_CONFIG_DIR/sessions/$OMP_SESSION_BUCKET"
-    local file id title size mtime msgs model
+    local file id title size mtime msgs model cwd
 
-    [[ -d "$bucket" ]] || return 0
-
-    for file in "$bucket"/*.jsonl; do
+    for file in "$OMP_CONFIG_DIR"/sessions/"$OMP_SESSION_BUCKET"*/*.jsonl; do
         [[ -f "$file" ]] || continue
+
+        cwd="$(head -n 2 "$file" | jq -r 'select(.type == "session") | .cwd // empty' 2>/dev/null | head -n 1 || true)"
+        [[ "$cwd" == "$PROJECT_DIR" || "$cwd" == "$PROJECT_DIR/"* ]] || continue
 
         id="${file##*/}"
         id="${id#*_}"
@@ -366,6 +485,7 @@ opencode_sessions() {
                coalesce(case when json_valid(s.model) then json_extract(s.model, '$.id') else s.model end, '')
         from session s
         where s.directory = '$PROJECT_DIR'
+           or substr(s.directory, 1, length('$PROJECT_DIR') + 1) = '$PROJECT_DIR/'
         order by s.time_updated desc;
     "
 
@@ -377,27 +497,35 @@ opencode_sessions() {
 }
 
 qoder_sessions() {
-    local project="$QODER_CONFIG_DIR/projects/-${PROJECT_DIR#/}"
-    local file id title size mtime msgs model
+    local prefix="-${PROJECT_DIR#/}"
+    local project file id title size mtime msgs model cwd
 
-    project="${project//\//-}"
+    prefix="${prefix//\//-}"
 
-    [[ -d "$project" ]] || return 0
+    for project in "$QODER_CONFIG_DIR"/projects/"$prefix"*/; do
+        [[ -d "$project" ]] || continue
 
-    for file in "$project"/*.jsonl; do
-        [[ -f "$file" ]] || continue
+        file="$(find "$project" -maxdepth 1 -name '*.jsonl' -print -quit)"
+        [[ -n "$file" ]] || continue
 
-        id="$(basename "$file" .jsonl)"
-        title="$(jq -r 'select(.type == "user") | .message.content[0].text // empty' "$file" 2>/dev/null | head -n 1 || true)"
-        [[ -n "$title" ]] || title="$id"
-        title="${title//|/-}"
+        cwd="$(head -n 1 "$file" | jq -r 'select(.type == "workspace-directories") | .directories[0] // empty' 2>/dev/null || true)"
+        [[ "$cwd" == "$PROJECT_DIR" || "$cwd" == "$PROJECT_DIR/"* ]] || continue
 
-        size="$(stat -c %s "$file")"
-        mtime="$(stat -c %Y "$file")"
-        msgs="$(grep -cE '"type"[[:space:]]*:[[:space:]]*"user"' "$file" 2>/dev/null || true)"
-        model="$(grep -m1 -o '"model":"[^"]*"' "$file" 2>/dev/null | cut -d'"' -f4 || true)"
+        for file in "$project"/*.jsonl; do
+            [[ -f "$file" ]] || continue
 
-        printf '%s|%s|%s|%s|%s|%s\n' "$id" "$title" "$size" "$mtime" "$msgs" "$model"
+            id="$(basename "$file" .jsonl)"
+            title="$(jq -r 'select(.type == "user") | .message.content[0].text // empty' "$file" 2>/dev/null | head -n 1 || true)"
+            [[ -n "$title" ]] || title="$id"
+            title="${title//|/-}"
+
+            size="$(stat -c %s "$file")"
+            mtime="$(stat -c %Y "$file")"
+            msgs="$(grep -cE '"type"[[:space:]]*:[[:space:]]*"user"' "$file" 2>/dev/null || true)"
+            model="$(grep -m1 -o '"model":"[^"]*"' "$file" 2>/dev/null | cut -d'"' -f4 || true)"
+
+            printf '%s|%s|%s|%s|%s|%s\n' "$id" "$title" "$size" "$mtime" "$msgs" "$model"
+        done
     done | sort -t'|' -k4,4nr
 }
 
@@ -411,7 +539,11 @@ esac
 
 SESSION_ID=""
 
-if (( ${#SESSIONS[@]} > 0 )); then
+if [[ "$MODE" == "resume" ]]; then
+    SESSION_ID="$RESUME_ID"
+elif [[ "$MODE" == "new" ]]; then
+    :
+elif (( ${#SESSIONS[@]} > 0 )); then
     printf '\nSessions in this workspace:\n\n'
     printf '  %2s  %-16s  %8s  %5s  %s\n' '#' 'Modified' 'Size' 'Msgs' 'Title'
 
@@ -427,6 +559,10 @@ if (( ${#SESSIONS[@]} > 0 )); then
 
         printf '      %s%s\n' "$id" "${model:+  $model}"
     done
+
+    if [[ "$MODE" == "list" ]]; then
+        exit 0
+    fi
 
     printf '\n  %2d) new session\n\n' "$(( ${#SESSIONS[@]} + 1 ))"
 
@@ -453,6 +589,9 @@ if (( ${#SESSIONS[@]} > 0 )); then
             fi
             ;;
     esac
+elif [[ "$MODE" == "list" ]]; then
+    printf 'No sessions in this workspace.\n'
+    exit 0
 fi
 
 HARNESS_ARGS=()
@@ -538,6 +677,8 @@ OPENCODE_AGENT_DIR="$OPENCODE_CONFIG_DIR/agents"
 mkdir -p -- "$OPENCODE_AGENT_DIR"
 
 if [[ -d "$OMP_CONFIG_DIR/agents" ]]; then
+    rm -f -- "$OPENCODE_AGENT_DIR"/omp-*.md
+
     for OMP_AGENT_FILE in "$OMP_CONFIG_DIR/agents"/*.md; do
         [[ -f "$OMP_AGENT_FILE" ]] || continue
 
@@ -551,10 +692,50 @@ if [[ -d "$OMP_CONFIG_DIR/agents" ]]; then
         OMP_AGENT_DESC="${OMP_AGENT_DESC%\"}"
         OMP_AGENT_DESC="${OMP_AGENT_DESC//\"/\\\"}"
 
+        OMP_AGENT_TOOLS="$(awk '
+            /^---$/ { n++; next }
+            n == 1 && /^tools:/ { in_tools = 1; next }
+            in_tools && /^[[:space:]]*-[[:space:]]*/ { sub(/^[[:space:]]*-[[:space:]]*/, ""); print; next }
+            in_tools { in_tools = 0 }
+        ' "$OMP_AGENT_FILE")"
+
+        OMP_AGENT_PERMS=""
+
+        if [[ -n "$OMP_AGENT_TOOLS" ]]; then
+            if ! grep -qxE 'edit|write|patch' <<< "$OMP_AGENT_TOOLS"; then
+                OMP_AGENT_PERMS+='  - action: edit
+    resource: "*"
+    effect: deny
+'
+            fi
+
+            if ! grep -qx 'bash' <<< "$OMP_AGENT_TOOLS"; then
+                OMP_AGENT_PERMS+='  - action: shell
+    resource: "*"
+    effect: deny
+'
+            fi
+
+            if ! grep -qxE 'web_search|web_fetch' <<< "$OMP_AGENT_TOOLS"; then
+                OMP_AGENT_PERMS+='  - action: websearch
+    resource: "*"
+    effect: deny
+  - action: webfetch
+    resource: "*"
+    effect: deny
+'
+            fi
+        fi
+
         {
             printf -- '---\n'
             printf 'description: "%s"\n' "$OMP_AGENT_DESC"
             printf 'mode: subagent\n'
+
+            if [[ -n "$OMP_AGENT_PERMS" ]]; then
+                printf 'permissions:\n%s' "$OMP_AGENT_PERMS"
+            fi
+
             printf -- '---\n\n'
             awk 'BEGIN { n = 0 } /^---$/ { n++; next } n >= 2 { print }' "$OMP_AGENT_FILE"
         } > "$OPENCODE_AGENT_DIR/omp-$OMP_AGENT_NAME.md"
@@ -571,6 +752,8 @@ if [[ -d "$OMP_CONFIG_DIR/managed-skills" ]]; then
     fi
 
     mkdir -p -- "$OPENCODE_SKILL_DIR"
+
+    find "$OPENCODE_SKILL_DIR" -maxdepth 1 -xtype l -delete
 
     for OMP_SKILL_DIR in "$OMP_CONFIG_DIR/managed-skills"/*/; do
         [[ -f "$OMP_SKILL_DIR/SKILL.md" ]] || continue
@@ -590,7 +773,14 @@ if podman container exists "$CONTAINER_NAME"; then
         --format '{{.State.Status}}' \
         "$CONTAINER_NAME" 2>/dev/null || echo unknown)"
 
-    fail "Container $CONTAINER_NAME already exists (status: $STATUS). Inspect with podman ps -a or remove with podman rm -f $CONTAINER_NAME."
+    if [[ "$STATUS" == "running" || "$STATUS" == "paused" ]]; then
+        fail "Container $CONTAINER_NAME is already $STATUS. Inspect with podman ps -a or remove with podman rm -f $CONTAINER_NAME."
+    fi
+
+    printf 'Removing stale container %s (%s)...\n' "$CONTAINER_NAME" "$STATUS" >&2
+
+    podman rm -f "$CONTAINER_NAME" >/dev/null 2>&1 || \
+        fail "Cannot remove stale container: $CONTAINER_NAME"
 fi
 
 # ============================================================
@@ -699,12 +889,28 @@ printf '  API:      127.0.0.1:%s -> 8000\n\n' "$PORT_API"
 # Podman configuration
 # ============================================================
 
+# Optional host protection. Unset by default so heavy builds are not capped.
+RESOURCE_ARGS=()
+
+if [[ -n "${DEV_CONTAINER_MEMORY:-}" ]]; then
+    RESOURCE_ARGS+=(--memory "$DEV_CONTAINER_MEMORY")
+fi
+
+if [[ -n "${DEV_CONTAINER_CPUS:-}" ]]; then
+    RESOURCE_ARGS+=(--cpus "$DEV_CONTAINER_CPUS")
+fi
+
+if [[ -n "${DEV_CONTAINER_TMPFS:-}" ]]; then
+    RESOURCE_ARGS+=(--tmpfs "/tmp:rw,size=$DEV_CONTAINER_TMPFS")
+fi
+
 PODMAN_ARGS=(
     run
     --rm
     -it
     --init
     --ulimit core=0
+    --pull=never
 
     --name "$CONTAINER_NAME"
     --hostname "$CONTAINER_NAME"
@@ -716,6 +922,8 @@ PODMAN_ARGS=(
     --cap-drop=ALL
     --security-opt=no-new-privileges
     --pids-limit=512
+
+    "${RESOURCE_ARGS[@]}"
 
     --publish "127.0.0.1:${PORT_OMP}:3000"
     --publish "127.0.0.1:${PORT_VITE}:5173"
@@ -743,6 +951,9 @@ PODMAN_ARGS=(
     --env "PI_CODING_AGENT_SESSION_DIR=$OMP_SESSION_DIR"
     --env QODER_CONFIG_DIR=/home/dev/.qoder
     --env COLORTERM
+    --env TZ
+
+    "${GIT_IDENTITY_ARGS[@]}"
 
     "${HERDR_MOUNT_ARGS[@]}"
 )
