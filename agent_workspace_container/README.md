@@ -86,8 +86,13 @@ throwaway home keeps `/home/dev/.qoder` a pure mount target and leaves
 | `$(omp config path)/memories` | `/home/dev/.omp/agent/memories` | ro |
 | `$(omp config path)/config.yml` | `/home/dev/.omp/agent/config.yml` | ro |
 | `$(omp config path)/models.yml` | `/home/dev/.omp/agent/models.yml` | ro |
+| `~/.omp/plugins` | `/home/dev/.omp/plugins` | ro |
 | `~/.config/opencode` | `/home/dev/.config/opencode` | ro |
 | `~/.local/share/opencode` | `/home/dev/.local/share/opencode` | rw |
+| `~/.local/state/opencode` | `/home/dev/.local/state/opencode` | rw |
+| `~/.claude/skills` | `/home/dev/.claude/skills` | ro |
+| `~/.agents/skills` | `/home/dev/.agents/skills` | ro |
+| `/usr/share/omarchy/default/agents/skills` | same path | ro |
 | `~/.qoder` | `/home/dev/.qoder` | rw |
 | `~/.qoder/entry`, `.bin`, `security-resources`, `external-commands`, `plugins`, `shell-snapshots` | same paths under `/home/dev/.qoder` | ro |
 | `~/.qoder/settings.json` | `/home/dev/.qoder/settings.json` | ro |
@@ -96,6 +101,20 @@ The read-only entries shadow the writable config mounts: the harness can read
 its extensions, skills, agents, OpenCode config, Qoder dispatcher/runtime/plugin
 hooks, and git hooks/config, but cannot replace them with code the host would
 execute.
+
+`dev-container` also writes two host-side views so OMP and OpenCode see the same
+material:
+
+- `~/.config/opencode/agents/omp-<name>.md` — OMP agent bodies converted to
+  OpenCode subagents. OMP's `model`/`tools`/`spawns` frontmatter is not
+  OpenCode-compatible, so only `description`, `mode: subagent`, and the body are
+  kept.
+- `~/.config/opencode/skills/<name>` — relative symlinks to
+  `~/.omp/agent/managed-skills/<name>`. OpenCode does not follow a symlinked
+  source root, so each skill is linked individually.
+
+Both are inside the read-only `~/.config/opencode` mount, so the container sees
+them but cannot change them.
 
 `GH_TOKEN` is passed through from the host environment (see
 [GitHub authentication](#github-authentication)) so `gh` and HTTPS `git push`
@@ -139,19 +158,36 @@ to push from inside the container.
 
 ## Session resume
 
-`dev-container` asks whether to resume the most recent session in the selected
-workspace and, on `y`, launches the harness with `--continue`. All three
-harnesses support it:
+After you pick a harness, `dev-container` lists the sessions that harness can
+resume in the selected workspace and lets you pick one:
 
-| Harness | Flag |
+```
+Sessions in this workspace:
+
+   #  Modified              Size   Msgs  Title
+   1  2026-11-17 08:58  650.2 KB     64  Add cwd workspace option to dev-container
+      01a1d3ac-bd7a-70c0-892a-96363ab508ee  openrouter/baidu/ernie-5.5-flash-preview:free
+   2  2026-11-17 08:58  512.0 KB    167  Dev container cwd workspace
+      01a1d3b3-adeb-71f3-92da-4aa314908054  baidu/ernie-5.5-flash-preview:free
+
+   3) new session
+
+Select session number (or q to quit):
+```
+
+Each entry shows the title, size, modification time, message count, session id,
+and model. Enter a number to resume that session, the last number (or an empty
+line) to start a new one, or `q` to quit.
+
+| Harness | Resume flag |
 |---|---|
-| OMP | `--continue` |
-| OpenCode | `--continue` |
-| Qoder | `--continue` |
+| OMP | `--resume <id>` |
+| OpenCode | `--session <id>` |
+| Qoder | `--resume <id>` |
 
 Sessions are keyed by the container working directory
 (`/workspace/<workspace-name>`), so a session started in one workspace is not
-offered in another. Answering `n` starts a fresh session.
+offered in another.
 
 Sessions are **container-local**. The harness config directories are shared
 with the host, but the working directory is not, so a host session and a
@@ -169,8 +205,10 @@ The container is an isolation boundary, not a second host.
 - `--cap-drop=ALL`, `--security-opt=no-new-privileges`, `--pids-limit=512`.
 - Ports are published on `127.0.0.1` only.
 - No SSH agent, no `~/.ssh`, no host keyring, no Docker/Podman socket.
-- `GH_TOKEN` is the only credential forwarded, and only when you export it
-  explicitly. It is a fine-grained PAT, not the host's broad OAuth token.
+- `GH_TOKEN` is the only credential passed through the environment, and only
+  when you export it explicitly. It is a fine-grained PAT, not the host's broad
+  OAuth token. Provider credentials still live in the mounted harness data
+  directories (see the residual risks).
 
 Paths the host harness loads as code are mounted **read-only** over the
 writable config mounts, so a compromised agent cannot plant something that runs
@@ -181,10 +219,19 @@ on the host at its next start:
 | `~/.omp/agent/extensions` | OMP loads and executes these |
 | `~/.omp/agent/managed-skills` | skills become agent instructions |
 | `~/.omp/agent/agents` | agent definitions shape host behaviour |
-| `~/.config/opencode` | OpenCode loads `plugins/`, `tui.jsonc`, and `opencode.json` from here |
+| `~/.omp/agent/memories` | memories are injected into host sessions |
+| `~/.omp/agent/config.yml`, `models.yml` | hooks and provider endpoints |
+| `~/.omp/plugins` | OMP loads and executes npm plugins |
+| `~/.config/opencode` | OpenCode loads `plugins/`, `tui.jsonc`, `opencode.json`, and the generated `agents/`/`skills/` views |
+| `~/.claude/skills`, `~/.agents/skills` | shared skill trees |
+| `/usr/share/omarchy/default/agents/skills` | targets of the `~/.agents/skills` symlinks |
+| `~/.qoder/entry`, `.bin`, `security-resources`, `external-commands`, `plugins`, `shell-snapshots`, `settings.json` | Qoder dispatcher, runtime, plugin hooks, command registry, marketplace list, shell snapshots, policy |
+| `<workspace>/.git/hooks`, `<workspace>/.git/config` | git hooks and `core.hooksPath`/`sshCommand` |
 
-Creating an extension, skill, agent, OpenCode plugin, Qoder plugin, or git hook
-from inside the container therefore fails; do that on the host.
+Creating a host-level extension, skill, agent, OpenCode plugin, Qoder plugin,
+or git hook from inside the container therefore fails; do that on the host.
+Project-local `.opencode/skills` and `.opencode/agents` still work because they
+live in the writable workspace.
 
 Residual risks to keep in mind:
 

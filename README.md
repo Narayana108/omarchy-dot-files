@@ -43,10 +43,11 @@ the container's working directory.
 dev-container            # pick workspace, then harness
 ```
 
-It then asks whether to resume the most recent session in that workspace and
-launches the harness with `--continue` if you answer `y`. A fine-grained GitHub
-PAT exported as `LLM_GH_TOKEN` is passed into the container as `GH_TOKEN`, so
-`gh` and HTTPS `git push` work without credentials baked into the image.
+It then lists the sessions that harness can resume in that workspace — title,
+size, date, message count, id, and model — and resumes the one you pick (or
+starts a new one). A fine-grained GitHub PAT exported as `LLM_GH_TOKEN` is
+passed into the container as `GH_TOKEN`, so `gh` and HTTPS `git push` work
+without credentials baked into the image.
 
 The image it needs is built from `agent_workspace_container/`:
 

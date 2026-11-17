@@ -68,6 +68,9 @@ command -v ss >/dev/null 2>&1 || fail "Install iproute2 (ss is required)."
 
 (( $# == 0 )) || fail "Run dev-container without arguments to open the workspace menu."
 
+podman image exists "$IMAGE" || \
+    fail "Container image not found: $IMAGE"
+
 [[ -d "$WORKSPACES_DIR" ]] || \
     fail "Workspace directory does not exist: $WORKSPACES_DIR"
 
@@ -199,38 +202,36 @@ HARNESS_NUMBER="$(prompt_choice "Select harness number (or q to quit): " "${#AGE
 HARNESS="${AGENT_HARNESSES[$((HARNESS_NUMBER - 1))]}"
 
 # ============================================================
-# Session resume
+# Agent harness configuration
 # ============================================================
 
-# Every harness accepts --continue: it reopens the most recent session
-# for the current working directory and starts a new one if none exists.
-HARNESS_ARGS=()
+OPENCODE_CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/opencode"
+OPENCODE_DATA_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/opencode"
+OPENCODE_STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/opencode"
+QODER_CONFIG_DIR="$HOME/.qoder"
+OMP_PLUGINS_DIR="$HOME/.omp/plugins"
+CLAUDE_SKILLS_DIR="$HOME/.claude/skills"
+AGENTS_SKILLS_DIR="$HOME/.agents/skills"
+OMARCHY_SKILLS_DIR="/usr/share/omarchy/default/agents/skills"
 
-printf '\nResume the most recent session in this workspace? [y/N] ' >&2
-
-RESUME_ANSWER=""
-read -r RESUME_ANSWER || true
-
-case "${RESUME_ANSWER,,}" in
-    y|yes)
-        HARNESS_ARGS+=(--continue)
-        ;;
-esac
+mkdir -p -- \
+    "$OPENCODE_CONFIG_DIR" \
+    "$OPENCODE_DATA_DIR" \
+    "$OPENCODE_STATE_DIR" \
+    "$QODER_CONFIG_DIR"
 
 # ============================================================
 # OMP configuration
 # ============================================================
 
-OMP_CONFIG_DIR="$(omp config path)"
+OMP_CONFIG_DIR="$(omp config path)" || \
+    fail "Cannot resolve the OMP configuration path."
 
 [[ -n "$OMP_CONFIG_DIR" ]] || \
     fail "OMP returned an empty configuration path."
 
 [[ -d "$OMP_CONFIG_DIR" ]] || \
     fail "OMP configuration not found: $OMP_CONFIG_DIR"
-
-podman image exists "$IMAGE" || \
-    fail "Container image not found: $IMAGE"
 
 # ============================================================
 # GitHub CLI authentication
@@ -251,14 +252,176 @@ else
 fi
 
 # ============================================================
-# Agent harness configuration
+# Session resume
 # ============================================================
 
-OPENCODE_CONFIG_DIR="$HOME/.config/opencode"
-OPENCODE_DATA_DIR="$HOME/.local/share/opencode"
-QODER_CONFIG_DIR="$HOME/.qoder"
+format_bytes() {
+    local n="$1"
 
-mkdir -p -- "$OPENCODE_CONFIG_DIR" "$OPENCODE_DATA_DIR" "$QODER_CONFIG_DIR"
+    if (( n < 1024 )); then
+        printf '%d B' "$n"
+    elif (( n < 1048576 )); then
+        printf '%d.%d KB' $((n / 1024)) $(((n % 1024) * 10 / 1024))
+    elif (( n < 1073741824 )); then
+        printf '%d.%d MB' $((n / 1048576)) $(((n % 1048576) * 10 / 1048576))
+    else
+        printf '%d.%d GB' $((n / 1073741824)) $(((n % 1073741824) * 10 / 1073741824))
+    fi
+}
+
+format_date() {
+    date -d "@$1" '+%Y-%m-%d %H:%M' 2>/dev/null || printf '%s' "$1"
+}
+
+truncate_text() {
+    local text="$1"
+    local max="${2:-60}"
+
+    if (( ${#text} > max )); then
+        printf '%s…' "${text:0:max-1}"
+    else
+        printf '%s' "$text"
+    fi
+}
+
+# One line per session: id|title|bytes|mtime|messages|model
+omp_sessions() {
+    local bucket="$OMP_CONFIG_DIR/sessions/--workspace-$WORKSPACE_NAME--"
+    local file id title size mtime msgs model
+
+    [[ -d "$bucket" ]] || return 0
+
+    for file in "$bucket"/*.jsonl; do
+        [[ -f "$file" ]] || continue
+
+        id="${file##*/}"
+        id="${id#*_}"
+        id="${id%.jsonl}"
+
+        title="$(head -n 1 "$file" | jq -r '.title // empty' 2>/dev/null || true)"
+        [[ -n "$title" ]] || title="$(basename "$file" .jsonl)"
+        title="${title//|/-}"
+
+        size="$(stat -c %s "$file")"
+        mtime="$(stat -c %Y "$file")"
+        msgs="$(grep -cE '"type"[[:space:]]*:[[:space:]]*"message"' "$file" 2>/dev/null || true)"
+        model="$(grep -m1 -o '"model":"[^"]*"' "$file" 2>/dev/null | cut -d'"' -f4 || true)"
+
+        printf '%s|%s|%s|%s|%s|%s\n' "$id" "$title" "$size" "$mtime" "$msgs" "$model"
+    done | sort -t'|' -k4,4nr
+}
+
+opencode_sessions() {
+    local db="$OPENCODE_DATA_DIR/opencode.db"
+    local query
+
+    [[ -f "$db" ]] || return 0
+
+    query="
+        select s.id,
+               replace(s.title, '|', '-'),
+               coalesce((select sum(length(cast(p.data as blob))) from part p where p.session_id = s.id), 0),
+               s.time_updated / 1000,
+               (select count(*) from message m where m.session_id = s.id),
+               coalesce(case when json_valid(s.model) then json_extract(s.model, '$.id') else s.model end, '')
+        from session s
+        where s.directory = '$CONTAINER_WORKSPACE_DIR'
+        order by s.time_updated desc;
+    "
+
+    if command -v sqlite3 >/dev/null 2>&1; then
+        sqlite3 -noheader -separator '|' "$db" "$query" 2>/dev/null || true
+    elif command -v opencode >/dev/null 2>&1; then
+        opencode db "$query" 2>/dev/null | tail -n +2 || true
+    fi
+}
+
+qoder_sessions() {
+    local project="$QODER_CONFIG_DIR/projects/-workspace-$WORKSPACE_NAME"
+    local file id title size mtime msgs model
+
+    [[ -d "$project" ]] || return 0
+
+    for file in "$project"/*.jsonl; do
+        [[ -f "$file" ]] || continue
+
+        id="$(basename "$file" .jsonl)"
+        title="$(jq -r 'select(.type == "user") | .message.content[0].text // empty' "$file" 2>/dev/null | head -n 1 || true)"
+        [[ -n "$title" ]] || title="$id"
+        title="${title//|/-}"
+
+        size="$(stat -c %s "$file")"
+        mtime="$(stat -c %Y "$file")"
+        msgs="$(grep -cE '"type"[[:space:]]*:[[:space:]]*"user"' "$file" 2>/dev/null || true)"
+        model="$(grep -m1 -o '"model":"[^"]*"' "$file" 2>/dev/null | cut -d'"' -f4 || true)"
+
+        printf '%s|%s|%s|%s|%s|%s\n' "$id" "$title" "$size" "$mtime" "$msgs" "$model"
+    done | sort -t'|' -k4,4nr
+}
+
+SESSIONS=()
+
+case "$HARNESS" in
+    omp)      mapfile -t SESSIONS < <(omp_sessions) ;;
+    opencode) mapfile -t SESSIONS < <(opencode_sessions) ;;
+    qoder)    mapfile -t SESSIONS < <(qoder_sessions) ;;
+esac
+
+SESSION_ID=""
+
+if (( ${#SESSIONS[@]} > 0 )); then
+    printf '\nSessions in this workspace:\n\n'
+    printf '  %2s  %-16s  %8s  %5s  %s\n' '#' 'Modified' 'Size' 'Msgs' 'Title'
+
+    for i in "${!SESSIONS[@]}"; do
+        IFS='|' read -r id title size mtime msgs model <<< "${SESSIONS[$i]}"
+
+        printf '  %2d  %-16s  %8s  %5s  %s\n' \
+            "$((i + 1))" \
+            "$(format_date "$mtime")" \
+            "$(format_bytes "$size")" \
+            "$msgs" \
+            "$(truncate_text "$title" 60)"
+
+        printf '      %s%s\n' "$id" "${model:+  $model}"
+    done
+
+    printf '\n  %2d) new session\n\n' "$(( ${#SESSIONS[@]} + 1 ))"
+
+    printf 'Select session number (or q to quit): ' >&2
+    read -r SESSION_CHOICE || SESSION_CHOICE=""
+
+    case "${SESSION_CHOICE,,}" in
+        q|quit|exit)
+            exit 0
+            ;;
+        "")
+            ;;
+        *)
+            if [[ "$SESSION_CHOICE" =~ ^[0-9]+$ ]]; then
+                SESSION_NUMBER=$((10#$SESSION_CHOICE))
+
+                if (( SESSION_NUMBER >= 1 && SESSION_NUMBER <= ${#SESSIONS[@]} )); then
+                    IFS='|' read -r SESSION_ID _ _ _ _ _ <<< "${SESSIONS[$((SESSION_NUMBER - 1))]}"
+                elif (( SESSION_NUMBER != ${#SESSIONS[@]} + 1 )); then
+                    fail "Invalid session number: $SESSION_CHOICE"
+                fi
+            else
+                fail "Invalid session number: $SESSION_CHOICE"
+            fi
+            ;;
+    esac
+fi
+
+HARNESS_ARGS=()
+
+if [[ -n "$SESSION_ID" ]]; then
+    case "$HARNESS" in
+        omp)      HARNESS_ARGS+=(--resume "$SESSION_ID") ;;
+        opencode) HARNESS_ARGS+=(--session "$SESSION_ID") ;;
+        qoder)    HARNESS_ARGS+=(--resume "$SESSION_ID") ;;
+    esac
+fi
 
 # Paths the host harness loads as code. Mount them read-only over the writable
 # config mounts so a compromised agent inside the container cannot plant an
@@ -295,6 +458,85 @@ if [[ -f "$QODER_CONFIG_DIR/settings.json" ]]; then
     QODER_READONLY_MOUNTS+=(
         --mount "type=bind,src=$QODER_CONFIG_DIR/settings.json,dst=/home/dev/.qoder/settings.json,ro"
     )
+fi
+
+# OMP's npm plugins. Read-only: install and upgrade them on the host.
+OMP_PLUGIN_MOUNTS=()
+
+if [[ -d "$OMP_PLUGINS_DIR" ]]; then
+    OMP_PLUGIN_MOUNTS+=(
+        --mount "type=bind,src=$OMP_PLUGINS_DIR,dst=/home/dev/.omp/plugins,ro"
+    )
+fi
+
+# Shared skill directories. OpenCode discovers ~/.claude/skills and
+# ~/.agents/skills natively; OMP reads the same trees through its own config.
+SKILL_MOUNTS=()
+
+for SKILL_DIR in "$CLAUDE_SKILLS_DIR" "$AGENTS_SKILLS_DIR"; do
+    [[ -d "$SKILL_DIR" ]] || continue
+    SKILL_MOUNTS+=(
+        --mount "type=bind,src=$SKILL_DIR,dst=/home/dev/${SKILL_DIR#"$HOME"/},ro"
+    )
+done
+
+# ~/.agents/skills entries symlink into the Omarchy defaults; mount the target
+# so those links resolve inside the container.
+if [[ -d "$OMARCHY_SKILLS_DIR" ]]; then
+    SKILL_MOUNTS+=(
+        --mount "type=bind,src=$OMARCHY_SKILLS_DIR,dst=$OMARCHY_SKILLS_DIR,ro"
+    )
+fi
+
+# OMP's agent frontmatter is not OpenCode-compatible: `model` is a list and
+# `tools` is a list, while OpenCode expects a string model and a tools map.
+# Generate OpenCode-shaped copies that keep the description and system prompt.
+OPENCODE_AGENT_DIR="$OPENCODE_CONFIG_DIR/agents"
+
+mkdir -p -- "$OPENCODE_AGENT_DIR"
+
+if [[ -d "$OMP_CONFIG_DIR/agents" ]]; then
+    for OMP_AGENT_FILE in "$OMP_CONFIG_DIR/agents"/*.md; do
+        [[ -f "$OMP_AGENT_FILE" ]] || continue
+
+        OMP_AGENT_NAME="$(basename "$OMP_AGENT_FILE" .md)"
+        OMP_AGENT_DESC="$(awk '
+            /^---$/ { n++; next }
+            n == 1 && /^description:/ { sub(/^description:[[:space:]]*/, ""); print; exit }
+        ' "$OMP_AGENT_FILE")"
+        OMP_AGENT_DESC="${OMP_AGENT_DESC:-OMP $OMP_AGENT_NAME agent}"
+        OMP_AGENT_DESC="${OMP_AGENT_DESC#\"}"
+        OMP_AGENT_DESC="${OMP_AGENT_DESC%\"}"
+        OMP_AGENT_DESC="${OMP_AGENT_DESC//\"/\\\"}"
+
+        {
+            printf -- '---\n'
+            printf 'description: "%s"\n' "$OMP_AGENT_DESC"
+            printf 'mode: subagent\n'
+            printf -- '---\n\n'
+            awk 'BEGIN { n = 0 } /^---$/ { n++; next } n >= 2 { print }' "$OMP_AGENT_FILE"
+        } > "$OPENCODE_AGENT_DIR/omp-$OMP_AGENT_NAME.md"
+    done
+fi
+
+# OMP's managed skills already use the SKILL.md layout OpenCode discovers, but
+# OpenCode does not follow a symlinked source root. Link each skill directory.
+OPENCODE_SKILL_DIR="$OPENCODE_CONFIG_DIR/skills"
+
+if [[ -d "$OMP_CONFIG_DIR/managed-skills" ]]; then
+    if [[ -L "$OPENCODE_SKILL_DIR" ]]; then
+        rm -f -- "$OPENCODE_SKILL_DIR"
+    fi
+
+    mkdir -p -- "$OPENCODE_SKILL_DIR"
+
+    for OMP_SKILL_DIR in "$OMP_CONFIG_DIR/managed-skills"/*/; do
+        [[ -f "$OMP_SKILL_DIR/SKILL.md" ]] || continue
+
+        OMP_SKILL_NAME="$(basename "$OMP_SKILL_DIR")"
+        ln -sfn "../../../.omp/agent/managed-skills/$OMP_SKILL_NAME" \
+            "$OPENCODE_SKILL_DIR/$OMP_SKILL_NAME"
+    done
 fi
 
 # ============================================================
@@ -388,8 +630,8 @@ printf '\nStarting development environment...\n\n'
 printf 'Workspace:  %s\n' "$WORKSPACE_NAME"
 printf 'Harness:   %s\n' "$HARNESS"
 
-if (( ${#HARNESS_ARGS[@]} > 0 )); then
-    printf 'Session:   resume most recent\n'
+if [[ -n "$SESSION_ID" ]]; then
+    printf 'Session:   resume %s\n' "$SESSION_ID"
 else
     printf 'Session:   new\n'
 fi
@@ -419,8 +661,13 @@ PODMAN_ARGS=(
     run
     --rm
     -it
+    --init
+    --ulimit core=0
 
     --name "$CONTAINER_NAME"
+    --hostname "$CONTAINER_NAME"
+    --label "dev-container.workspace=$WORKSPACE_NAME"
+    --label "dev-container.harness=$HARNESS"
 
     --userns="keep-id:uid=$CONTAINER_UID,gid=$CONTAINER_GID"
 
@@ -440,15 +687,19 @@ PODMAN_ARGS=(
 
     --mount "type=bind,src=$OPENCODE_CONFIG_DIR,dst=/home/dev/.config/opencode,ro"
     --mount "type=bind,src=$OPENCODE_DATA_DIR,dst=/home/dev/.local/share/opencode,rw"
+    --mount "type=bind,src=$OPENCODE_STATE_DIR,dst=/home/dev/.local/state/opencode,rw"
     --mount "type=bind,src=$QODER_CONFIG_DIR,dst=/home/dev/.qoder,rw"
 
     "${OMP_READONLY_MOUNTS[@]}"
     "${QODER_READONLY_MOUNTS[@]}"
+    "${OMP_PLUGIN_MOUNTS[@]}"
+    "${SKILL_MOUNTS[@]}"
 
     --workdir="$CONTAINER_WORKSPACE_DIR"
 
     --env PI_CODING_AGENT_DIR=/home/dev/.omp/agent
     --env QODER_CONFIG_DIR=/home/dev/.qoder
+    --env COLORTERM
 
     "${HERDR_MOUNT_ARGS[@]}"
 )
